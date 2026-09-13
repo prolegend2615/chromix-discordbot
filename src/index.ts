@@ -23,43 +23,74 @@ function isAdmin(member: { permissions: PermissionsBitField } | null) {
   return Boolean(member?.permissions.has(PermissionsBitField.Flags.Administrator));
 }
 
-async function settingsMenuPage1(userId: string, guildId?: string) {
-  const settings = await getSettings(userId, guildId);
-  const availablePersonas = settings.vip ? PERSONAS : PERSONAS.filter(value => value !== "Custom");
-  const persona = new StringSelectMenuBuilder().setCustomId("settings:persona").setPlaceholder(`Persona: ${settings.persona}`)
-    .addOptions(availablePersonas.map(value => ({ label: value, value, default: value === settings.persona })));
-  const provider = new StringSelectMenuBuilder().setCustomId("settings:provider").setPlaceholder(`Provider: ${settings.provider === "gemini" ? "Gemini" : "Groq"}`)
-    .addOptions([
-      { label: "Gemini (default)", value: "gemini", default: settings.provider === "gemini" },
-      { label: "Groq", value: "groq", default: settings.provider === "groq" },
-    ]);
-  const models = MODELS[settings.provider];
-  const model = new StringSelectMenuBuilder().setCustomId("settings:model").setPlaceholder(`Model: ${settings.model}`)
-    .addOptions(models.map(value => ({ label: value, value, default: value === settings.model })));
-  return [
-    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(provider),
-    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(model),
-    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(persona),
-  ];
+type SettingsStep = "persona" | "length" | "provider" | "model" | "safety" | "prompt";
+
+const SETTINGS_EXPLANATION = [
+  "Choose how the AI responds in this server.",
+  "Set its persona, chat length, provider, model, safety, and custom instructions.",
+].join("\n");
+
+function settingsStepContent(step: SettingsStep) {
+  const labels: Record<SettingsStep, string> = {
+    persona: "Persona",
+    length: "chat length",
+    provider: "Provider",
+    model: "Model",
+    safety: "Safety",
+    prompt: "custom instructions",
+  };
+  return `${SETTINGS_EXPLANATION}\n\nSelect ${labels[step]}`;
 }
 
-async function settingsMenuPage2(userId: string, guildId?: string) {
+async function settingsComponents(step: SettingsStep, userId: string, guildId?: string) {
   const settings = await getSettings(userId, guildId);
-  const length = new StringSelectMenuBuilder().setCustomId("settings:length").setPlaceholder(`Length: ${settings.response_length}`)
-    .addOptions(["Short", "Medium", "Detailed"].map(value => ({ label: value, value, default: value === settings.response_length })));
-  const safety = new StringSelectMenuBuilder().setCustomId("settings:safety").setPlaceholder(`Safety: ${settings.safety_level}`)
-    .addOptions(["Strict", "Balanced", "Relaxed"].map(value => ({ label: value, value, default: value === settings.safety_level })));
-  const prompt = new StringSelectMenuBuilder().setCustomId("settings:prompt").setPlaceholder("Custom instructions").addOptions({ label: "Edit custom instructions", value: "edit" });
-  return [
-    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(length),
-    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(safety),
-    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(prompt),
-  ];
+  if (step === "persona") {
+    const availablePersonas = settings.vip ? PERSONAS : PERSONAS.filter(value => value !== "Custom");
+    return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder().setCustomId("settings:persona").setPlaceholder(`Persona: ${settings.persona}`)
+        .addOptions(availablePersonas.map(value => ({ label: value, value, default: value === settings.persona }))),
+    )];
+  }
+  if (step === "length") {
+    return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder().setCustomId("settings:length").setPlaceholder(`Length: ${settings.response_length}`)
+        .addOptions(["Short", "Medium", "Detailed"].map(value => ({ label: value, value, default: value === settings.response_length }))),
+    )];
+  }
+  if (step === "provider") {
+    return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder().setCustomId("settings:provider").setPlaceholder(`Provider: ${settings.provider === "gemini" ? "Gemini" : "Groq"}`)
+        .addOptions([
+          { label: "Gemini (default)", value: "gemini", default: settings.provider === "gemini" },
+          { label: "Groq", value: "groq", default: settings.provider === "groq" },
+        ]),
+    )];
+  }
+  if (step === "model") {
+    const models = MODELS[settings.provider];
+    return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder().setCustomId("settings:model").setPlaceholder(`Model: ${settings.model}`)
+        .addOptions(models.map(value => ({ label: value, value, default: value === settings.model }))),
+    )];
+  }
+  if (step === "safety") {
+    return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder().setCustomId("settings:safety").setPlaceholder(`Safety: ${settings.safety_level}`)
+        .addOptions(["Strict", "Balanced", "Relaxed"].map(value => ({ label: value, value, default: value === settings.safety_level }))),
+    )];
+  }
+  return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    new StringSelectMenuBuilder().setCustomId("settings:prompt").setPlaceholder("Custom instructions")
+      .addOptions({ label: "Edit custom instructions", value: "edit" }),
+  )];
 }
 
 async function showSettings(interaction: ChatInputCommandInteraction) {
-  await interaction.reply({ content: "Configure your personal AI settings for this server.", components: await settingsMenuPage1(interaction.user.id, interaction.guildId ?? undefined), ephemeral: true });
-  await interaction.followUp({ content: "More settings", components: await settingsMenuPage2(interaction.user.id, interaction.guildId ?? undefined), ephemeral: true });
+  await interaction.reply({
+    content: settingsStepContent("persona"),
+    components: await settingsComponents("persona", interaction.user.id, interaction.guildId ?? undefined),
+    ephemeral: true,
+  });
 }
 
 async function personaMenu(userId: string, guildId?: string) {
@@ -175,8 +206,11 @@ client.on(Events.MessageCreate, async message => {
       return;
     }
     if (command === `${prefix}settings`) {
-      await message.reply({ content: "Configure your personal AI settings for this server.", components: await settingsMenuPage1(message.author.id, message.guildId ?? undefined), allowedMentions: { repliedUser: false } });
-      await message.reply({ content: "More settings", components: await settingsMenuPage2(message.author.id, message.guildId ?? undefined), allowedMentions: { repliedUser: false } });
+      await message.reply({
+        content: settingsStepContent("persona"),
+        components: await settingsComponents("persona", message.author.id, message.guildId ?? undefined),
+        allowedMentions: { repliedUser: false },
+      });
       return;
     }
     if ([`${prefix}listen`, `${prefix}ignore`].includes(command.split(/\s+/)[0])) {
@@ -333,20 +367,39 @@ async function handleSettingSelect(interaction: StringSelectMenuInteraction) {
     modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
     return interaction.showModal(modal);
   }
-  if (option === "provider") {
+
+  const settings = await getSettings(interaction.user.id, interaction.guildId ?? undefined);
+  if (option === "model" && !(MODELS[settings.provider] as readonly string[]).includes(selected)) {
+    throw new Error("That model is not available for the selected provider.");
+  }
+
+  let changes: Parameters<typeof updateSettings>[2];
+  let nextStep: SettingsStep;
+  if (option === "persona") {
+    changes = { persona: selected as Persona };
+    nextStep = "length";
+  } else if (option === "length") {
+    changes = { response_length: selected as ResponseLength };
+    nextStep = "provider";
+  } else if (option === "provider") {
     const provider = selected as Provider;
-    await updateSettings(interaction.user.id, interaction.guildId ?? undefined, { provider, model: MODELS[provider][0] });
-await interaction.update({ content: "Provider and model saved.", components: await settingsMenuPage1(interaction.user.id, interaction.guildId ?? undefined) });
-      return;
-    }
-    const settings = await getSettings(interaction.user.id, interaction.guildId ?? undefined);
-    if (option === "model" && !(MODELS[settings.provider] as readonly string[]).includes(selected)) throw new Error("That model is not available for the selected provider.");
-    const changes = option === "persona" ? { persona: selected as Persona }
-      : option === "length" ? { response_length: selected as ResponseLength }
-      : option === "model" ? { model: selected }
-      : { safety_level: selected as SafetyLevel };
-    await updateSettings(interaction.user.id, interaction.guildId ?? undefined, changes);
-    await interaction.update({ content: "Settings saved.", components: await settingsMenuPage1(interaction.user.id, interaction.guildId ?? undefined) });
+    changes = { provider, model: MODELS[provider][0] };
+    nextStep = "model";
+  } else if (option === "model") {
+    changes = { model: selected };
+    nextStep = "safety";
+  } else if (option === "safety") {
+    changes = { safety_level: selected as SafetyLevel };
+    nextStep = "prompt";
+  } else {
+    return;
+  }
+
+  await updateSettings(interaction.user.id, interaction.guildId ?? undefined, changes);
+  await interaction.update({
+    content: settingsStepContent(nextStep),
+    components: await settingsComponents(nextStep, interaction.user.id, interaction.guildId ?? undefined),
+  });
 }
 
 client.login(config.discordToken);
