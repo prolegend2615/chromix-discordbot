@@ -8,6 +8,14 @@ import { recordResponseMetric, resolveThreadConversationKey } from "./metrics.js
 const activePrompts = new Set<string>();
 const DISCORD_MESSAGE_LIMIT = 2000;
 
+type SendableTextChannel = TextBasedChannel & {
+  send: (content: string) => Promise<Message>;
+};
+
+function isSendableTextChannel(channel: TextBasedChannel): channel is SendableTextChannel {
+  return "send" in channel && typeof channel.send === "function";
+}
+
 function splitDiscordMessage(content: string): string[] {
   if (!content) return ["I could not generate a response."];
   const chunks: string[] = [];
@@ -72,6 +80,9 @@ export async function runChat(args: {
     const chunks = splitDiscordMessage(answer);
     const editMessage = args.edit ?? (content => placeholder.edit(content));
     await editMessage(chunks[0]);
+    if (chunks.length > 1 && !isSendableTextChannel(args.channel)) {
+      throw new Error("This channel cannot receive additional response messages.");
+    }
     for (const chunk of chunks.slice(1)) {
       await args.channel.send(chunk);
     }
