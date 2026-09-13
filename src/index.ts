@@ -1,7 +1,7 @@
 import {
-  ActionRowBuilder, ChannelType, Client, Events, GatewayIntentBits, ModalBuilder,
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, Events, GatewayIntentBits, ModalBuilder,
   PermissionsBitField, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder,
-  type ChatInputCommandInteraction, type Message, type StringSelectMenuInteraction,
+  type ButtonInteraction, type ChatInputCommandInteraction, type Message, type StringSelectMenuInteraction,
 } from "discord.js";
 import { config } from "./config.js";
 import { runChat } from "./services/chat.js";
@@ -26,11 +26,11 @@ function isAdmin(member: { permissions: PermissionsBitField } | null) {
 type SettingsStep = "persona" | "length" | "provider" | "model" | "safety" | "prompt";
 
 const SETTINGS_EXPLANATION = [
-  "Choose how the AI responds in this server.",
-  "Set its persona, chat length, provider, model, safety, and custom instructions.",
+  "Use these settings to control how Chromix chats in this server.",
+  "Choose a value or keep the default, then press Continue.",
 ].join("\n");
 
-function settingsStepContent(step: SettingsStep) {
+function settingsEmbed(step: SettingsStep) {
   const labels: Record<SettingsStep, string> = {
     persona: "Persona",
     length: "chat length",
@@ -39,55 +39,71 @@ function settingsStepContent(step: SettingsStep) {
     safety: "Safety",
     prompt: "custom instructions",
   };
-  return `${SETTINGS_EXPLANATION}\n\nSelect ${labels[step]}`;
+  return new EmbedBuilder()
+    .setTitle("Chromix Settings")
+    .setColor(0x5865F2)
+    .setDescription(`${SETTINGS_EXPLANATION}\n\nSelect ${labels[step]}.`);
+}
+
+function settingsDoneEmbed() {
+  return new EmbedBuilder()
+    .setTitle("Chromix Settings")
+    .setColor(0x57F287)
+    .setDescription(`${SETTINGS_EXPLANATION}\n\nSettings saved.`);
 }
 
 async function settingsComponents(step: SettingsStep, userId: string, guildId?: string) {
   const settings = await getSettings(userId, guildId);
+  const withContinue = (menu: StringSelectMenuBuilder) => [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId(`settings:continue:${step}`).setLabel("Continue").setStyle(ButtonStyle.Primary),
+    ),
+  ];
   if (step === "persona") {
     const availablePersonas = settings.vip ? PERSONAS : PERSONAS.filter(value => value !== "Custom");
-    return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    return withContinue(
       new StringSelectMenuBuilder().setCustomId("settings:persona").setPlaceholder(`Persona: ${settings.persona}`)
         .addOptions(availablePersonas.map(value => ({ label: value, value, default: value === settings.persona }))),
-    )];
+    );
   }
   if (step === "length") {
-    return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    return withContinue(
       new StringSelectMenuBuilder().setCustomId("settings:length").setPlaceholder(`Length: ${settings.response_length}`)
         .addOptions(["Short", "Medium", "Detailed"].map(value => ({ label: value, value, default: value === settings.response_length }))),
-    )];
+    );
   }
   if (step === "provider") {
-    return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    return withContinue(
       new StringSelectMenuBuilder().setCustomId("settings:provider").setPlaceholder(`Provider: ${settings.provider === "gemini" ? "Gemini" : "Groq"}`)
         .addOptions([
           { label: "Gemini (default)", value: "gemini", default: settings.provider === "gemini" },
           { label: "Groq", value: "groq", default: settings.provider === "groq" },
         ]),
-    )];
+    );
   }
   if (step === "model") {
     const models = MODELS[settings.provider];
-    return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    return withContinue(
       new StringSelectMenuBuilder().setCustomId("settings:model").setPlaceholder(`Model: ${settings.model}`)
         .addOptions(models.map(value => ({ label: value, value, default: value === settings.model }))),
-    )];
+    );
   }
   if (step === "safety") {
-    return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    return withContinue(
       new StringSelectMenuBuilder().setCustomId("settings:safety").setPlaceholder(`Safety: ${settings.safety_level}`)
         .addOptions(["Strict", "Balanced", "Relaxed"].map(value => ({ label: value, value, default: value === settings.safety_level }))),
-    )];
+    );
   }
-  return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+  return withContinue(
     new StringSelectMenuBuilder().setCustomId("settings:prompt").setPlaceholder("Custom instructions")
       .addOptions({ label: "Edit custom instructions", value: "edit" }),
-  )];
+  );
 }
 
 async function showSettings(interaction: ChatInputCommandInteraction) {
   await interaction.reply({
-    content: settingsStepContent("persona"),
+    embeds: [settingsEmbed("persona")],
     components: await settingsComponents("persona", interaction.user.id, interaction.guildId ?? undefined),
     ephemeral: true,
   });
@@ -207,7 +223,7 @@ client.on(Events.MessageCreate, async message => {
     }
     if (command === `${prefix}settings`) {
       await message.reply({
-        content: settingsStepContent("persona"),
+        embeds: [settingsEmbed("persona")],
         components: await settingsComponents("persona", message.author.id, message.guildId ?? undefined),
         allowedMentions: { repliedUser: false },
       });
@@ -326,6 +342,7 @@ client.on(Events.InteractionCreate, async interaction => {
       }
     }
     if (interaction.isStringSelectMenu()) await handleSettingSelect(interaction);
+    if (interaction.isButton()) await handleSettingsContinue(interaction);
     if (interaction.isModalSubmit() && interaction.customId === "settings:prompt-modal") {
       updateSettings(interaction.user.id, interaction.guildId ?? undefined, { custom_system_prompt: interaction.fields.getTextInputValue("custom-prompt").trim() });
       await interaction.reply({ content: "Custom instructions saved.", ephemeral: true });
@@ -374,30 +391,47 @@ async function handleSettingSelect(interaction: StringSelectMenuInteraction) {
   }
 
   let changes: Parameters<typeof updateSettings>[2];
-  let nextStep: SettingsStep;
   if (option === "persona") {
     changes = { persona: selected as Persona };
-    nextStep = "length";
   } else if (option === "length") {
     changes = { response_length: selected as ResponseLength };
-    nextStep = "provider";
   } else if (option === "provider") {
     const provider = selected as Provider;
     changes = { provider, model: MODELS[provider][0] };
-    nextStep = "model";
   } else if (option === "model") {
     changes = { model: selected };
-    nextStep = "safety";
   } else if (option === "safety") {
     changes = { safety_level: selected as SafetyLevel };
-    nextStep = "prompt";
   } else {
     return;
   }
 
   await updateSettings(interaction.user.id, interaction.guildId ?? undefined, changes);
+  await interaction.deferUpdate();
+}
+
+async function handleSettingsContinue(interaction: ButtonInteraction) {
+  const [scope, action, step] = interaction.customId.split(":");
+  if (scope !== "settings" || action !== "continue") return;
+
+  const nextSteps: Record<SettingsStep, SettingsStep | null> = {
+    persona: "length",
+    length: "provider",
+    provider: "model",
+    model: "safety",
+    safety: "prompt",
+    prompt: null,
+  };
+  const currentStep = step as SettingsStep;
+  if (!Object.prototype.hasOwnProperty.call(nextSteps, currentStep)) return;
+
+  const nextStep = nextSteps[currentStep];
+  if (!nextStep) {
+    await interaction.update({ embeds: [settingsDoneEmbed()], components: [] });
+    return;
+  }
   await interaction.update({
-    content: settingsStepContent(nextStep),
+    embeds: [settingsEmbed(nextStep)],
     components: await settingsComponents(nextStep, interaction.user.id, interaction.guildId ?? undefined),
   });
 }
