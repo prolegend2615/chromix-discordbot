@@ -18,6 +18,7 @@ export async function runChat(args: {
   prompt: string; user: User; member: GuildMember | null; guildId?: string; guildName?: string;
   channel: TextBasedChannel; channelId: string; sourceMessageId?: string; referencedMessageId?: string;
   reply: (content: string) => Promise<Message>;
+  edit?: (content: string) => Promise<unknown>;
 }) {
   const prompt = args.prompt.trim();
   if (!prompt) throw new Error("Please include a message for me to answer.");
@@ -48,7 +49,7 @@ export async function runChat(args: {
       settings,
       history,
       onDelta,
-    }));
+    }), args.edit);
     const responseTimeMs = Date.now() - startedAt;
     await recordResponseMetric(args.user.id, args.guildId, conversationChannelId, responseTimeMs);
     await addHistory(args.user.id, args.guildId, conversationChannelId, { role: "user", content: prompt }, args.sourceMessageId, args.referencedMessageId);
