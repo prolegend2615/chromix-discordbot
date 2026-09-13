@@ -338,7 +338,17 @@ client.on(Events.InteractionCreate, async interaction => {
         const prompt = interaction.options.getString("message", true);
         await interaction.deferReply();
         if (!interaction.channel?.isTextBased()) throw new Error("This channel does not support messages.");
-        await runChat({ prompt, user: interaction.user, member: interaction.member instanceof Object && "displayName" in interaction.member ? interaction.member : null, guildId: interaction.guildId ?? undefined, guildName: interaction.guild?.name, channel: interaction.channel, channelId: interaction.channelId, reply: content => interaction.editReply(content) as Promise<Message> });
+        await runChat({
+          prompt,
+          user: interaction.user,
+          member: interaction.member instanceof Object && "displayName" in interaction.member ? interaction.member : null,
+          guildId: interaction.guildId ?? undefined,
+          guildName: interaction.guild?.name,
+          channel: interaction.channel,
+          channelId: interaction.channelId,
+          reply: content => interaction.editReply(content) as Promise<Message>,
+          edit: content => interaction.editReply(content),
+        });
       }
     }
     if (interaction.isStringSelectMenu()) await handleSettingSelect(interaction);
