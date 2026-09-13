@@ -80,11 +80,14 @@ export async function runChat(args: {
     const chunks = splitDiscordMessage(answer);
     const editMessage = args.edit ?? (content => placeholder.edit(content));
     await editMessage(chunks[0]);
-    if (chunks.length > 1 && !isSendableTextChannel(args.channel)) {
-      throw new Error("This channel cannot receive additional response messages.");
-    }
-    for (const chunk of chunks.slice(1)) {
-      await args.channel.send(chunk);
+    if (chunks.length > 1) {
+      const sendableChannel = args.channel;
+      if (!isSendableTextChannel(sendableChannel)) {
+        throw new Error("This channel cannot receive additional response messages.");
+      }
+      for (const chunk of chunks.slice(1)) {
+        await sendableChannel.send(chunk);
+      }
     }
     const responseTimeMs = Date.now() - startedAt;
     await recordResponseMetric(args.user.id, args.guildId, conversationChannelId, responseTimeMs);
