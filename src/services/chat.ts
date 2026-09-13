@@ -3,10 +3,28 @@ import { getSettings } from "./settings.js";
 import { addHistory, getHistory } from "./history.js";
 import { checkPromptLimit, isChannelAllowed } from "./access.js";
 import { streamAnswer } from "./ai.js";
-import { streamToDiscord } from "./streaming.js";
 import { recordResponseMetric, resolveThreadConversationKey } from "./metrics.js";
 
 const activePrompts = new Set<string>();
+const DISCORD_MESSAGE_LIMIT = 2000;
+
+function splitDiscordMessage(content: string): string[] {
+  if (!content) return ["I could not generate a response."];
+  const chunks: string[] = [];
+  let remaining = content;
+
+  while (remaining.length > DISCORD_MESSAGE_LIMIT) {
+    const candidate = remaining.slice(0, DISCORD_MESSAGE_LIMIT);
+    const newline = candidate.lastIndexOf("\n");
+    const space = candidate.lastIndexOf(" ");
+    const splitAt = Math.max(newline, space);
+    const cutAt = splitAt > 0 ? splitAt : DISCORD_MESSAGE_LIMIT;
+    chunks.push(remaining.slice(0, cutAt));
+    remaining = remaining.slice(cutAt).replace(/^[ \n]+/, "");
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
 
 function getThreadChannelId(channel: TextBasedChannel): string | undefined {
   if (!("threadId" in channel)) return undefined;
@@ -41,15 +59,22 @@ export async function runChat(args: {
     const userName = args.user.globalName ?? args.user.username;
     const serverNickname = args.member?.nickname ?? "None";
     const startedAt = Date.now();
-    const answer = await streamToDiscord(placeholder, onDelta => streamAnswer({
+    let answer = "";
+    await streamAnswer({
       prompt,
       userName,
       serverNickname,
       guildName: args.guildName ?? "Direct Message",
       settings,
       history,
-      onDelta,
-    }), args.edit);
+      onDelta: text => { answer += text; },
+    });
+    const chunks = splitDiscordMessage(answer);
+    const editMessage = args.edit ?? (content => placeholder.edit(content));
+    await editMessage(chunks[0]);
+    for (const chunk of chunks.slice(1)) {
+      await args.channel.send(chunk);
+    }
     const responseTimeMs = Date.now() - startedAt;
     await recordResponseMetric(args.user.id, args.guildId, conversationChannelId, responseTimeMs);
     await addHistory(args.user.id, args.guildId, conversationChannelId, { role: "user", content: prompt }, args.sourceMessageId, args.referencedMessageId);
