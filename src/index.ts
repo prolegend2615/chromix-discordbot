@@ -1,7 +1,7 @@
 import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, Events, GatewayIntentBits, ModalBuilder,
   PermissionsBitField, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder,
-  type ButtonInteraction, type ChatInputCommandInteraction, type Message, type StringSelectMenuInteraction,
+  type ButtonInteraction, type ChatInputCommandInteraction, type Message, type StringSelectMenuInteraction, type User,
 } from "discord.js";
 import { config } from "./config.js";
 import { runChat } from "./services/chat.js";
@@ -21,6 +21,142 @@ const MODELS = {
 
 function isAdmin(member: { permissions: PermissionsBitField } | null) {
   return Boolean(member?.permissions.has(PermissionsBitField.Flags.Administrator));
+}
+
+type CommandReplyPayload = {
+  content?: string;
+  embeds?: EmbedBuilder[];
+  components?: unknown;
+  ephemeral?: boolean;
+  allowedMentions?: { repliedUser?: boolean };
+};
+
+type CommandContext = {
+  userId: string;
+  guildId?: string;
+  channelId: string;
+  member: { permissions: PermissionsBitField } | null;
+  ephemeral: boolean;
+  recipient?: User;
+  targetChannel?: { id: string; toString(): string };
+  reply: (payload: CommandReplyPayload) => Promise<unknown>;
+};
+
+function messageCommandContext(message: Message, overrides: Partial<Pick<CommandContext, "recipient" | "targetChannel">> = {}): CommandContext {
+  return {
+    userId: message.author.id,
+    guildId: message.guildId ?? undefined,
+    channelId: message.channelId,
+    member: message.member,
+    ephemeral: false,
+    ...overrides,
+    reply: payload => {
+      const { ephemeral: _ephemeral, ...messagePayload } = payload;
+      return message.reply(messagePayload as Parameters<Message["reply"]>[0]);
+    },
+  };
+}
+
+function interactionCommandContext(interaction: ChatInputCommandInteraction, overrides: Partial<Pick<CommandContext, "recipient" | "targetChannel">> = {}): CommandContext {
+  const member = interaction.member;
+  const permissions = member && "permissions" in member ? member.permissions : null;
+  return {
+    userId: interaction.user.id,
+    guildId: interaction.guildId ?? undefined,
+    channelId: interaction.channelId,
+    member: permissions ? { permissions: PermissionsBitField.resolve(permissions) } : null,
+    ephemeral: true,
+    ...overrides,
+    reply: payload => interaction.reply(payload as Parameters<ChatInputCommandInteraction["reply"]>[0]),
+  };
+}
+
+async function handleClearCommand(context: CommandContext, reset: boolean) {
+  await clearHistory(context.userId, context.guildId, context.channelId);
+  if (reset) await resetSettings(context.userId, context.guildId);
+  await context.reply({
+    content: reset ? "Your history was cleared and your AI settings were reset." : "Your history in this channel has been cleared.",
+    ephemeral: context.ephemeral,
+    allowedMentions: { repliedUser: false },
+  });
+}
+
+async function handleStatusCommand(context: CommandContext) {
+  const settings = await getSettings(context.userId, context.guildId);
+  const quota = await getPromptStatus(context.userId);
+  const averageResponseMs = await getAverageResponseTime(context.userId);
+  const persona = settings.persona === "Custom" ? `Custom: ${settings.custom_persona || "not configured"}` : settings.persona;
+  await context.reply({
+    embeds: [new EmbedBuilder().setTitle("Your AI status").setColor(0x57F287).addFields(
+      { name: "Provider / model", value: `${settings.provider === "gemini" ? "Gemini" : "Groq"} • \`${settings.model}\`` },
+      { name: "Persona", value: persona },
+      { name: "Response length", value: settings.response_length, inline: true },
+      { name: "History", value: `${settings.vip ? 12 : 5} messages${settings.vip ? " (VIP)" : ""}`, inline: true },
+      { name: "Average response", value: `${averageResponseMs} ms`, inline: true },
+      { name: "Prompt quota", value: `${quota.remaining}/8 remaining this minute${quota.cooldownSeconds ? ` • cooldown: ${quota.cooldownSeconds}s` : ""}` },
+      { name: "Quota violations", value: `${quota.violations} in the last ${Math.round(quota.windowMs / 1000)}s`, inline: true },
+    )],
+    ephemeral: context.ephemeral,
+    allowedMentions: { repliedUser: false },
+  });
+}
+
+async function handlePersonaCommand(context: CommandContext) {
+  const settings = await getSettings(context.userId, context.guildId);
+  await context.reply({
+    content: settings.vip
+      ? "Choose a preset, or use Custom to write a personalized persona for VIP access."
+      : "Choose a preset or select Custom to describe how the AI should act. Custom personas are VIP-only.",
+    components: await personaMenu(context.userId, context.guildId),
+    ephemeral: context.ephemeral,
+    allowedMentions: { repliedUser: false },
+  });
+}
+
+async function handleDeleteMyDataCommand(context: CommandContext) {
+  await deleteUserDataExceptVip(context.userId);
+  await context.reply({
+    content: "Your saved conversations, prompt records, response metrics, quota violations, and personal settings were deleted. Your VIP status was kept.",
+    ephemeral: context.ephemeral,
+    allowedMentions: { repliedUser: false },
+  });
+}
+
+async function handleVipCommand(context: CommandContext, grant: boolean) {
+  if (context.userId !== VIP_ADMIN_ID) throw new Error("You are not allowed to use this command.");
+  if (!context.recipient) throw new Error("Mention a user to give or remove VIP access.");
+  await setVip(context.recipient.id, grant);
+  await context.reply({
+    content: grant
+      ? `${context.recipient} now has VIP access. Their history limit is 12 messages.`
+      : `${context.recipient} no longer has VIP access.`,
+    ephemeral: context.ephemeral,
+    allowedMentions: { repliedUser: false },
+  });
+}
+
+async function handleBlacklistCommand(context: CommandContext, blacklist: boolean) {
+  if (context.userId !== VIP_ADMIN_ID) throw new Error("You are not allowed to use this command.");
+  if (!context.recipient) throw new Error("Mention a user to blacklist or unblacklist.");
+  await setUserBlacklist(context.recipient.id, blacklist);
+  await context.reply({
+    content: blacklist
+      ? `${context.recipient} has been blacklisted and cannot be used with the bot.`
+      : `${context.recipient} has been removed from the blacklist.`,
+    ephemeral: context.ephemeral,
+    allowedMentions: { repliedUser: false },
+  });
+}
+
+async function handleChannelRuleCommand(context: CommandContext, rule: "listen" | "ignore") {
+  if (!context.guildId || !isAdmin(context.member)) throw new Error("Only server administrators can change channel rules.");
+  if (!context.targetChannel) throw new Error("Choose a text channel.");
+  await setChannelRule(context.guildId, context.targetChannel.id, rule);
+  await context.reply({
+    content: `${rule === "listen" ? "Enabled" : "Disabled"} the bot in ${context.targetChannel}.`,
+    ephemeral: context.ephemeral,
+    allowedMentions: { repliedUser: false },
+  });
 }
 
 type SettingsStep = "persona" | "length" | "provider" | "model" | "safety" | "prompt";
@@ -149,14 +285,11 @@ client.on(Events.MessageCreate, async message => {
   try {
     if (command.startsWith(`${prefix}chat`)) return await sendChatFromMessage(message, content.slice(`${prefix}chat`.length));
     if (command === `${prefix}clear`) {
-      clearHistory(message.author.id, message.guildId ?? undefined, message.channelId);
-      await message.reply({ content: "Your history in this channel has been cleared.", allowedMentions: { repliedUser: false } });
+      await handleClearCommand(messageCommandContext(message), false);
       return;
     }
     if (command === `${prefix}reset`) {
-      clearHistory(message.author.id, message.guildId ?? undefined, message.channelId);
-      resetSettings(message.author.id, message.guildId ?? undefined);
-      await message.reply({ content: "Your history was cleared and your AI settings were reset.", allowedMentions: { repliedUser: false } });
+      await handleClearCommand(messageCommandContext(message), true);
       return;
     }
     if (command === `${prefix}help`) {
@@ -164,61 +297,31 @@ client.on(Events.MessageCreate, async message => {
       return;
     }
     if (command === `${prefix}status`) {
-      const settings = await getSettings(message.author.id, message.guildId ?? undefined);
-      const quota = await getPromptStatus(message.author.id);
-      const averageResponseMs = await getAverageResponseTime(message.author.id);
-      const persona = settings.persona === "Custom" ? `Custom: ${settings.custom_persona || "not configured"}` : settings.persona;
-      await message.reply({ embeds: [new EmbedBuilder().setTitle("Your AI status").setColor(0x57F287).addFields(
-        { name: "Provider / model", value: `${settings.provider === "gemini" ? "Gemini" : "Groq"} • \`${settings.model}\`` },
-        { name: "Persona", value: persona },
-        { name: "Response length", value: settings.response_length, inline: true },
-        { name: "History", value: `${settings.vip ? 12 : 5} messages${settings.vip ? " (VIP)" : ""}`, inline: true },
-        { name: "Average response", value: `${averageResponseMs} ms`, inline: true },
-        { name: "Prompt quota", value: `${quota.remaining}/8 remaining this minute${quota.cooldownSeconds ? ` • cooldown: ${quota.cooldownSeconds}s` : ""}` },
-        { name: "Quota violations", value: `${quota.violations} in the last ${Math.round(quota.windowMs / 1000)}s`, inline: true },
-      )], allowedMentions: { repliedUser: false } });
+      await handleStatusCommand(messageCommandContext(message));
       return;
     }
     if (command === `${prefix}persona`) {
-      const settings = await getSettings(message.author.id, message.guildId ?? undefined);
-      await message.reply({ content: settings.vip ? "Choose a preset, or use Custom to write a personalized persona for VIP access." : "Choose a preset or select Custom to describe how the AI should act. Custom personas are VIP-only.", components: await personaMenu(message.author.id, message.guildId ?? undefined), allowedMentions: { repliedUser: false } });
+      await handlePersonaCommand(messageCommandContext(message));
       return;
     }
     if (command === `${prefix}delete-my-data`) {
-      deleteUserDataExceptVip(message.author.id);
-      await message.reply({ content: "Your saved conversations, prompt records, and personal settings were deleted. Your VIP status was kept.", allowedMentions: { repliedUser: false } });
+      await handleDeleteMyDataCommand(messageCommandContext(message));
       return;
     }
     if (command === `${prefix}give-vip`) {
-      if (message.author.id !== VIP_ADMIN_ID) throw new Error("You are not allowed to use this command.");
-      const recipient = message.mentions.users.first();
-      if (!recipient) throw new Error("Mention a user to give VIP access.");
-      await setVip(recipient.id, true);
-      await message.reply({ content: `${recipient} now has VIP access. Their history limit is 12 messages.`, allowedMentions: { repliedUser: false } });
+      await handleVipCommand(messageCommandContext(message, { recipient: message.mentions.users.first() ?? undefined }), true);
       return;
     }
     if (command === `${prefix}remove-vip`) {
-      if (message.author.id !== VIP_ADMIN_ID) throw new Error("You are not allowed to use this command.");
-      const recipient = message.mentions.users.first();
-      if (!recipient) throw new Error("Mention a user to remove VIP access.");
-      await setVip(recipient.id, false);
-      await message.reply({ content: `${recipient} no longer has VIP access.`, allowedMentions: { repliedUser: false } });
+      await handleVipCommand(messageCommandContext(message, { recipient: message.mentions.users.first() ?? undefined }), false);
       return;
     }
     if (command === `${prefix}blacklist`) {
-      if (message.author.id !== VIP_ADMIN_ID) throw new Error("You are not allowed to use this command.");
-      const recipient = message.mentions.users.first();
-      if (!recipient) throw new Error("Mention a user to blacklist.");
-      await setUserBlacklist(recipient.id, true);
-      await message.reply({ content: `${recipient} has been blacklisted and cannot use bot commands.`, allowedMentions: { repliedUser: false } });
+      await handleBlacklistCommand(messageCommandContext(message, { recipient: message.mentions.users.first() ?? undefined }), true);
       return;
     }
     if (command === `${prefix}unblacklist`) {
-      if (message.author.id !== VIP_ADMIN_ID) throw new Error("You are not allowed to use this command.");
-      const recipient = message.mentions.users.first();
-      if (!recipient) throw new Error("Mention a user to remove from the blacklist.");
-      await setUserBlacklist(recipient.id, false);
-      await message.reply({ content: `${recipient} has been removed from the blacklist.`, allowedMentions: { repliedUser: false } });
+      await handleBlacklistCommand(messageCommandContext(message, { recipient: message.mentions.users.first() ?? undefined }), false);
       return;
     }
     if (command === `${prefix}settings`) {
@@ -230,11 +333,9 @@ client.on(Events.MessageCreate, async message => {
       return;
     }
     if ([`${prefix}listen`, `${prefix}ignore`].includes(command.split(/\s+/)[0])) {
-      if (!message.guildId || !isAdmin(message.member)) throw new Error("Only server administrators can change channel rules.");
       const rule = command.startsWith(`${prefix}listen`) ? "listen" : "ignore";
       const channel = message.mentions.channels.first() ?? message.channel;
-      setChannelRule(message.guildId, channel.id, rule);
-      await message.reply(`${rule === "listen" ? "Enabled" : "Disabled"} the bot in ${channel}.`);
+      await handleChannelRuleCommand(messageCommandContext(message, { targetChannel: channel }), rule);
       return;
     }
     const mentioned = message.mentions.users.has(client.user!.id);
@@ -267,71 +368,45 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
       if (command === "status") {
-        const settings = await getSettings(interaction.user.id, interaction.guildId ?? undefined);
-        const quota = await getPromptStatus(interaction.user.id);
-        const averageResponseMs = await getAverageResponseTime(interaction.user.id);
-        const persona = settings.persona === "Custom" ? `Custom: ${settings.custom_persona || "not configured"}` : settings.persona;
-        await interaction.reply({ embeds: [new EmbedBuilder().setTitle("Your AI status").setColor(0x57F287).addFields(
-          { name: "Provider / model", value: `${settings.provider === "gemini" ? "Gemini" : "Groq"} • \`${settings.model}\`` },
-          { name: "Persona", value: persona },
-          { name: "Response length", value: settings.response_length, inline: true },
-          { name: "History", value: `${settings.vip ? 12 : 5} messages${settings.vip ? " (VIP)" : ""}`, inline: true },
-          { name: "Average response", value: `${averageResponseMs} ms`, inline: true },
-          { name: "Prompt quota", value: `${quota.remaining}/8 remaining this minute${quota.cooldownSeconds ? ` • cooldown: ${quota.cooldownSeconds}s` : ""}` },
-          { name: "Quota violations", value: `${quota.violations} in the last ${Math.round(quota.windowMs / 1000)}s`, inline: true },
-        )], ephemeral: true });
+        await handleStatusCommand(interactionCommandContext(interaction));
         return;
       }
       if (command === "persona") {
-        const settings = await getSettings(interaction.user.id, interaction.guildId ?? undefined);
-        await interaction.reply({ content: settings.vip ? "Choose a preset, or use Custom to write a personalized persona for VIP access." : "Choose a preset or select Custom to describe how the AI should act. Custom personas are VIP-only.", components: await personaMenu(interaction.user.id, interaction.guildId ?? undefined), ephemeral: true });
+        await handlePersonaCommand(interactionCommandContext(interaction));
         return;
       }
       if (command === "delete-my-data") {
-        deleteUserDataExceptVip(interaction.user.id);
-        await interaction.reply({ content: "Your saved conversations, prompt records, and personal settings were deleted. Your VIP status was kept.", ephemeral: true });
+        await handleDeleteMyDataCommand(interactionCommandContext(interaction));
         return;
       }
       if (command === "give-vip") {
-        if (interaction.user.id !== VIP_ADMIN_ID) throw new Error("You are not allowed to use this command.");
         const recipient = interaction.options.getUser("user", true);
-        await setVip(recipient.id, true);
-        await interaction.reply({ content: `${recipient} now has VIP access. Their history limit is 12 messages.`, ephemeral: true });
+        await handleVipCommand(interactionCommandContext(interaction, { recipient }), true);
         return;
       }
       if (command === "remove-vip") {
-        if (interaction.user.id !== VIP_ADMIN_ID) throw new Error("You are not allowed to use this command.");
         const recipient = interaction.options.getUser("user", true);
-        await setVip(recipient.id, false);
-        await interaction.reply({ content: `${recipient} no longer has VIP access.`, ephemeral: true });
+        await handleVipCommand(interactionCommandContext(interaction, { recipient }), false);
         return;
       }
       if (command === "blacklist") {
-        if (interaction.user.id !== VIP_ADMIN_ID) throw new Error("You are not allowed to use this command.");
         const recipient = interaction.options.getUser("user", true);
-        await setUserBlacklist(recipient.id, true);
-        await interaction.reply({ content: `${recipient} has been blacklisted and cannot use bot commands.`, ephemeral: true });
+        await handleBlacklistCommand(interactionCommandContext(interaction, { recipient }), true);
         return;
       }
       if (command === "unblacklist") {
-        if (interaction.user.id !== VIP_ADMIN_ID) throw new Error("You are not allowed to use this command.");
         const recipient = interaction.options.getUser("user", true);
-        await setUserBlacklist(recipient.id, false);
-        await interaction.reply({ content: `${recipient} has been removed from the blacklist.`, ephemeral: true });
+        await handleBlacklistCommand(interactionCommandContext(interaction, { recipient }), false);
         return;
       }
       if (command === "clear" || command === "reset") {
-        clearHistory(interaction.user.id, interaction.guildId ?? undefined, interaction.channelId);
-        if (command === "reset") resetSettings(interaction.user.id, interaction.guildId ?? undefined);
-        await interaction.reply({ content: command === "clear" ? "Your history in this channel has been cleared." : "Your history was cleared and settings reset.", ephemeral: true });
+        await handleClearCommand(interactionCommandContext(interaction), command === "reset");
         return;
       }
       if (command === "listen" || command === "ignore") {
-        if (!interaction.guildId || !isAdmin(interaction.member as never)) throw new Error("Only server administrators can change channel rules.");
         const channel = interaction.options.getChannel("channel") ?? interaction.channel;
         if (!channel || channel.type !== ChannelType.GuildText) throw new Error("Choose a text channel.");
-        setChannelRule(interaction.guildId, channel.id, command);
-        await interaction.reply({ content: `${command === "listen" ? "Enabled" : "Disabled"} the bot in ${channel}.`, ephemeral: true });
+        await handleChannelRuleCommand(interactionCommandContext(interaction, { targetChannel: channel }), command);
         return;
       }
       if (command === "chat") {
