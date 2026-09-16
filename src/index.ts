@@ -60,11 +60,14 @@ function messageCommandContext(message: Message, overrides: Partial<Pick<Command
 function interactionCommandContext(interaction: ChatInputCommandInteraction, overrides: Partial<Pick<CommandContext, "recipient" | "targetChannel">> = {}): CommandContext {
   const member = interaction.member;
   const permissions = member && "permissions" in member ? member.permissions : null;
+  const permissionBits = typeof permissions === "string"
+    ? BigInt(permissions)
+    : permissions?.bitfield;
   return {
     userId: interaction.user.id,
     guildId: interaction.guildId ?? undefined,
     channelId: interaction.channelId,
-    member: permissions ? { permissions: PermissionsBitField.resolve(permissions) } : null,
+    member: permissionBits === undefined ? null : { permissions: new PermissionsBitField(permissionBits) },
     ephemeral: true,
     ...overrides,
     reply: payload => interaction.reply(payload as Parameters<ChatInputCommandInteraction["reply"]>[0]),
