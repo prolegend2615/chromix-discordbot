@@ -12,4 +12,5 @@ export const config = {
   discordGuildId: process.env.DISCORD_GUILD_ID,
   geminiApiKey: required("GEMINI_API_KEY"),
   groqApiKey: process.env.GROQ_API_KEY,
+  openrouterApiKey: process.env.OPENROUTER_API_KEY,
 };
