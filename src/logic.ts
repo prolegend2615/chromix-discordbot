@@ -19,6 +19,18 @@ export function hasTimeWord(text: string) {
   return /\btime\b/i.test(text);
 }
 
+export type SetAfkRequest = {
+  username: string;
+  reason: string;
+};
+
+export function parseSetAfkRequest(text: string, username = "user"): SetAfkRequest | null {
+  const isSetAfkRequest = /^(?:please\s+|can you\s+|could you\s+)?(?:set|put|make)\s+(?:(?:my|me|myself)\s+)?afk\b/i.test(text.trim());
+  if (!isSetAfkRequest) return null;
+  const reason = /\breason\s*:\s*(.*)$/i.exec(text)?.[1]?.trim() || "None";
+  return { username: username.trim() || "user", reason };
+}
+
 export function classifyProviderError(error: unknown): "rate_limit" | "timeout" | "unavailable" | "invalid" | "unknown" {
   const text = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
   if (/rate.?limit|too many requests|429/.test(text)) return "rate_limit";
