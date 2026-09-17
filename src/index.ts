@@ -9,6 +9,7 @@ import { clearHistory } from "./services/history.js";
 import { deleteUserDataExceptVip, getSettings, isUserBlacklisted, PERSONAS, resetSettings, setUserBlacklist, setVip, updateSettings, type Persona, type Provider, type ResponseLength, type SafetyLevel } from "./services/settings.js";
 import { getPromptStatus, setChannelRule } from "./services/access.js";
 import { getAverageResponseTime } from "./services/metrics.js";
+import { clearAfkStatus, formatAfkMention, getAfkStatus } from "./services/afk.js";
 import { MODELS, userFacingProviderError } from "./logic.js";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
@@ -287,6 +288,7 @@ client.on(Events.MessageCreate, async message => {
   const content = message.content.trim();
   const command = content.toLowerCase();
   try {
+    await clearAfkStatus(message.author.id, message.guildId ?? undefined);
     if (command.startsWith(`${prefix}chat`)) return await sendChatFromMessage(message, content.slice(`${prefix}chat`.length));
     if (command === `${prefix}clear`) {
       await handleClearCommand(messageCommandContext(message), false);
@@ -341,6 +343,18 @@ client.on(Events.MessageCreate, async message => {
       const channel = message.mentions.channels.first() ?? message.channel;
       await handleChannelRuleCommand(messageCommandContext(message, { targetChannel: channel }), rule);
       return;
+    }
+    if (message.guildId) {
+      for (const [userId, user] of message.mentions.users) {
+        const afkStatus = await getAfkStatus(userId, message.guildId);
+        if (!afkStatus) continue;
+        const displayName = user.globalName ?? user.username;
+        await message.reply({
+          content: formatAfkMention(displayName, afkStatus.reason, afkStatus.created_at),
+          allowedMentions: { repliedUser: false },
+        });
+        return;
+      }
     }
     const mentioned = message.mentions.users.has(client.user!.id);
     const replyToBot = message.reference?.messageId
