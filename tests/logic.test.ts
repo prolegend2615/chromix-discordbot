@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { classifyProviderError, isModelAvailable, parsePrefixCommand, userFacingProviderError } from "../src/logic.js";
+import { classifyProviderError, hasTimeWord, isModelAvailable, parsePrefixCommand, userFacingProviderError } from "../src/logic.js";
 
 test("parses prefix commands and arguments case-insensitively", () => {
   assert.deepEqual(parsePrefixCommand("  C.CHAT hello world"), { name: "chat", args: ["hello", "world"] });
@@ -12,6 +12,12 @@ test("validates provider models", () => {
   assert.equal(isModelAvailable("gemini", "llama-3.3-70b-versatile"), false);
   assert.equal(isModelAvailable("groq", "llama-3.1-8b-instant"), true);
   assert.equal(isModelAvailable("openrouter", "deepseek/deepseek-v4-flash"), true);
+});
+
+test("matches only the standalone time word", () => {
+  assert.equal(hasTimeWord("What TIME is it?"), true);
+  assert.equal(hasTimeWord("sometimes"), false);
+  assert.equal(hasTimeWord("timely"), false);
 });
 
 test("classifies provider failures", () => {
