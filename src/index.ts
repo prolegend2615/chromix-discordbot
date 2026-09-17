@@ -9,16 +9,11 @@ import { clearHistory } from "./services/history.js";
 import { deleteUserDataExceptVip, getSettings, isUserBlacklisted, PERSONAS, resetSettings, setUserBlacklist, setVip, updateSettings, type Persona, type Provider, type ResponseLength, type SafetyLevel } from "./services/settings.js";
 import { getPromptStatus, setChannelRule } from "./services/access.js";
 import { getAverageResponseTime } from "./services/metrics.js";
-import { userFacingProviderError } from "./logic.js";
+import { MODELS, userFacingProviderError } from "./logic.js";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
 const prefix = "c.";
 const VIP_ADMIN_ID = "1347611715826876496";
-const MODELS = {
-  gemini: ["gemini-3.6-flash"],
-  groq: ["llama-3.3-70b-versatile", "openai/gpt-oss-20b"],
-} as const;
-
 function isAdmin(member: { permissions: PermissionsBitField } | null) {
   return Boolean(member?.permissions.has(PermissionsBitField.Flags.Administrator));
 }
@@ -91,7 +86,7 @@ async function handleStatusCommand(context: CommandContext) {
   const persona = settings.persona === "Custom" ? `Custom: ${settings.custom_persona || "not configured"}` : settings.persona;
   await context.reply({
     embeds: [new EmbedBuilder().setTitle("Your AI status").setColor(0x57F287).addFields(
-      { name: "Provider / model", value: `${settings.provider === "gemini" ? "Gemini" : "Groq"} • \`${settings.model}\`` },
+      { name: "Provider / model", value: `${providerLabel(settings.provider)} • \`${settings.model}\`` },
       { name: "Persona", value: persona },
       { name: "Response length", value: settings.response_length, inline: true },
       { name: "History", value: `${settings.vip ? 12 : 5} messages${settings.vip ? " (VIP)" : ""}`, inline: true },
@@ -169,6 +164,10 @@ const SETTINGS_EXPLANATION = [
   "Choose a value or keep the default, then press Continue.",
 ].join("\n");
 
+function providerLabel(provider: Provider) {
+  return provider === "gemini" ? "Gemini" : provider === "groq" ? "Groq" : "OpenRouter";
+}
+
 function settingsEmbed(step: SettingsStep) {
   const labels: Record<SettingsStep, string> = {
     persona: "Persona",
@@ -214,10 +213,11 @@ async function settingsComponents(step: SettingsStep, userId: string, guildId?: 
   }
   if (step === "provider") {
     return withContinue(
-      new StringSelectMenuBuilder().setCustomId("settings:provider").setPlaceholder(`Provider: ${settings.provider === "gemini" ? "Gemini" : "Groq"}`)
+      new StringSelectMenuBuilder().setCustomId("settings:provider").setPlaceholder(`Provider: ${providerLabel(settings.provider)}`)
         .addOptions([
           { label: "Gemini (default)", value: "gemini", default: settings.provider === "gemini" },
           { label: "Groq", value: "groq", default: settings.provider === "groq" },
+          { label: "OpenRouter", value: "openrouter", default: settings.provider === "openrouter" },
         ]),
     );
   }
