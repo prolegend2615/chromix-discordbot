@@ -10,6 +10,7 @@ test("parses prefix commands and arguments case-insensitively", () => {
 test("validates provider models", () => {
   assert.equal(isModelAvailable("gemini", "gemini-3.6-flash"), true);
   assert.equal(isModelAvailable("gemini", "llama-3.3-70b-versatile"), false);
+  assert.equal(isModelAvailable("openrouter", "deepseek/deepseek-v4-flash"), true);
 });
 
 test("classifies provider failures", () => {
