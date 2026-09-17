@@ -4,7 +4,7 @@ import { addHistory, getHistory } from "./history.js";
 import { checkPromptLimit, isChannelAllowed } from "./access.js";
 import { streamAnswer } from "./ai.js";
 import { recordResponseMetric, resolveThreadConversationKey } from "./metrics.js";
-import { clearAfkStatus, normalizeAfkReason, setAfkStatus } from "./afk.js";
+import { clearAfkStatus, getAfkStatus, normalizeAfkReason, setAfkStatus, type AfkStatus } from "./afk.js";
 import { parseSetAfkCommand } from "../logic.js";
 
 const activePrompts = new Set<string>();
@@ -47,11 +47,16 @@ export async function runChat(args: {
   channel: TextBasedChannel; channelId: string; messageTimestamp?: number; sourceMessageId?: string; referencedMessageId?: string;
   reply: (content: string) => Promise<Message>;
   edit?: (content: string) => Promise<unknown>;
+  onAfkSet?: (reason: string, placeholder: Message) => Promise<void>;
+  onWelcomeBack?: (status: AfkStatus) => Promise<void>;
 }) {
   const prompt = args.prompt.trim();
   if (!prompt) throw new Error("Please include a message for me to answer.");
   if (!(await isChannelAllowed(args.guildId, args.channelId))) throw new Error("I am not enabled in this channel.");
-  await clearAfkStatus(args.user.id, args.guildId);
+  const existingAfk = await getAfkStatus(args.user.id, args.guildId);
+  if (existingAfk) {
+    await clearAfkStatus(args.user.id, args.guildId);
+  }
   const threadId = getThreadChannelId(args.channel);
   const conversationChannelId = threadId ?? args.channelId;
   const key = resolveThreadConversationKey(args.guildId, threadId, args.user.id);
@@ -63,6 +68,7 @@ export async function runChat(args: {
   try {
     if ("sendTyping" in args.channel) await args.channel.sendTyping();
     const placeholder = await args.reply("Thinking…");
+    if (existingAfk) await args.onWelcomeBack?.(existingAfk);
     const settings = await getSettings(args.user.id, args.guildId);
     const history = await getHistory(args.user.id, args.guildId, conversationChannelId, settings.vip ? 12 : 5);
     // discord.js uses camelCase property names: User.globalName, User.username,
@@ -82,21 +88,28 @@ export async function runChat(args: {
       onDelta: text => { answer += text; },
     });
     const afkCommand = parseSetAfkCommand(answer);
+    let afkResponseHandled = false;
     if (afkCommand) {
       const reason = normalizeAfkReason(afkCommand.reason);
       await setAfkStatus(args.user.id, args.guildId, reason, args.messageTimestamp ?? Date.now());
       answer = `AFK status set. Reason: ${reason}.`;
-    }
-    const chunks = splitDiscordMessage(answer);
-    const editMessage = args.edit ?? (content => placeholder.edit(content));
-    await editMessage(chunks[0]);
-    if (chunks.length > 1) {
-      const sendableChannel = args.channel;
-      if (!isSendableTextChannel(sendableChannel)) {
-        throw new Error("This channel cannot receive additional response messages.");
+      if (args.onAfkSet) {
+        await args.onAfkSet(reason, placeholder);
+        afkResponseHandled = true;
       }
-      for (const chunk of chunks.slice(1)) {
-        await sendableChannel.send(chunk);
+    }
+    if (!afkResponseHandled) {
+      const chunks = splitDiscordMessage(answer);
+      const editMessage = args.edit ?? (content => placeholder.edit(content));
+      await editMessage(chunks[0]);
+      if (chunks.length > 1) {
+        const sendableChannel = args.channel;
+        if (!isSendableTextChannel(sendableChannel)) {
+          throw new Error("This channel cannot receive additional response messages.");
+        }
+        for (const chunk of chunks.slice(1)) {
+          await sendableChannel.send(chunk);
+        }
       }
     }
     const responseTimeMs = Date.now() - startedAt;
