@@ -10,7 +10,7 @@ import { deleteUserDataExceptVip, getSettings, isUserBlacklisted, PERSONAS, rese
 import { getPromptStatus, setChannelRule } from "./services/access.js";
 import { getAverageResponseTime } from "./services/metrics.js";
 import { clearAfkStatus, formatAfkDuration, formatAfkMention, getAfkStatus, type AfkStatus } from "./services/afk.js";
-import { MODELS, userFacingProviderError } from "./logic.js";
+import { isTransientNetworkError, MODELS, userFacingProviderError } from "./logic.js";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
 const prefix = "c.";
@@ -588,4 +588,24 @@ async function handleSettingsContinue(interaction: ButtonInteraction) {
   });
 }
 
-client.login(config.discordToken);
+async function loginWithRetry() {
+  let retryDelayMs = 5_000;
+  while (true) {
+    try {
+      await client.login(config.discordToken);
+      return;
+    } catch (error) {
+      if (!isTransientNetworkError(error)) {
+        console.error("Discord login failed permanently.", error);
+        process.exitCode = 1;
+        return;
+      }
+      const details = error instanceof Error ? error.message : String(error);
+      console.error(`Discord connection failed (${details}). Retrying in ${Math.round(retryDelayMs / 1000)}s.`);
+      await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+      retryDelayMs = Math.min(retryDelayMs * 2, 60_000);
+    }
+  }
+}
+
+void loginWithRetry();
