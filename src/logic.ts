@@ -15,6 +15,10 @@ export function isModelAvailable(provider: keyof typeof MODELS, model: string) {
   return (MODELS[provider] as readonly string[]).includes(model);
 }
 
+export function hasTimeWord(text: string) {
+  return /\btime\b/i.test(text);
+}
+
 export function classifyProviderError(error: unknown): "rate_limit" | "timeout" | "unavailable" | "invalid" | "unknown" {
   const text = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
   if (/rate.?limit|too many requests|429/.test(text)) return "rate_limit";
