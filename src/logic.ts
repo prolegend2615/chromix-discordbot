@@ -19,6 +19,13 @@ export function hasTimeWord(text: string) {
   return /\btime\b/i.test(text);
 }
 
+export function isTransientNetworkError(error: unknown) {
+  const value = error as { code?: unknown } | null;
+  const code = typeof value?.code === "string" ? value.code : "";
+  const text = error instanceof Error ? error.message : String(error);
+  return /UND_ERR_CONNECT_TIMEOUT|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENETUNREACH|EAI_AGAIN|connect timeout|fetch failed|network is unreachable/i.test(`${code} ${text}`);
+}
+
 export type SetAfkCommand = {
   reason: string;
 };
