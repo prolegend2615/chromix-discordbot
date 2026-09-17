@@ -270,6 +270,7 @@ async function sendChatFromMessage(message: Message, prompt: string, referenceId
   await runChat({
     prompt, user: message.author, member: message.member, guildId: message.guildId ?? undefined,
     guildName: message.guild?.name, channel: message.channel, channelId: message.channelId,
+    messageTimestamp: message.createdTimestamp,
     sourceMessageId: message.id, referencedMessageId: referenceId,
     reply: content => message.reply({ content, allowedMentions: { repliedUser: false } }),
   });
@@ -424,6 +425,7 @@ client.on(Events.InteractionCreate, async interaction => {
           guildName: interaction.guild?.name,
           channel: interaction.channel,
           channelId: interaction.channelId,
+          messageTimestamp: interaction.createdTimestamp,
           reply: content => interaction.editReply(content) as Promise<Message>,
           edit: content => interaction.editReply(content),
         });
