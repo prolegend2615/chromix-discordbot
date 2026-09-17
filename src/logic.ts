@@ -1,6 +1,7 @@
 export const MODELS = {
   gemini: ["gemini-3.6-flash"],
   groq: ["llama-3.3-70b-versatile", "openai/gpt-oss-20b"],
+  openrouter: ["google/gemini-3.6-flash", "deepseek/deepseek-v4-flash", "mistralai/mistral-small-2603"],
 } as const;
 
 export function parsePrefixCommand(content: string, prefix = "c.") {
