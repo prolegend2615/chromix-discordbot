@@ -9,7 +9,7 @@ import { clearHistory } from "./services/history.js";
 import { deleteUserDataExceptVip, getSettings, isUserBlacklisted, PERSONAS, resetSettings, setUserBlacklist, setVip, updateSettings, type Persona, type Provider, type ResponseLength, type SafetyLevel } from "./services/settings.js";
 import { getPromptStatus, setChannelRule } from "./services/access.js";
 import { getAverageResponseTime } from "./services/metrics.js";
-import { clearAfkStatus, formatAfkMention, getAfkStatus } from "./services/afk.js";
+import { clearAfkStatus, formatAfkDuration, formatAfkMention, getAfkStatus, type AfkStatus } from "./services/afk.js";
 import { MODELS, userFacingProviderError } from "./logic.js";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
@@ -267,6 +267,27 @@ function helpEmbed() {
     );
 }
 
+function afkSetEmbed(reason: string) {
+  return new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle("AFK status set")
+    .setDescription("✅ I have set your AFK status.")
+    .addFields({ name: "Reason", value: reason || "None" })
+    .setTimestamp();
+}
+
+function welcomeBackEmbed(displayName: string, status: AfkStatus) {
+  return new EmbedBuilder()
+    .setColor(0x57F287)
+    .setTitle("Welcome back!")
+    .setDescription(`👋 Welcome back, **${displayName}**.`)
+    .addFields(
+      { name: "You were AFK for", value: formatAfkDuration(status.created_at), inline: true },
+      { name: "Reason", value: status.reason || "None", inline: true },
+    )
+    .setTimestamp();
+}
+
 async function sendChatFromMessage(message: Message, prompt: string, referenceId?: string) {
   await runChat({
     prompt, user: message.author, member: message.member, guildId: message.guildId ?? undefined,
@@ -274,6 +295,14 @@ async function sendChatFromMessage(message: Message, prompt: string, referenceId
     messageTimestamp: message.createdTimestamp,
     sourceMessageId: message.id, referencedMessageId: referenceId,
     reply: content => message.reply({ content, allowedMentions: { repliedUser: false } }),
+    onAfkSet: (reason, placeholder) => placeholder.edit({
+      embeds: [afkSetEmbed(reason)],
+      allowedMentions: { parse: [], repliedUser: false },
+    }).then(() => undefined),
+    onWelcomeBack: status => message.reply({
+      embeds: [welcomeBackEmbed(message.author.globalName ?? message.author.username, status)],
+      allowedMentions: { parse: [], repliedUser: false },
+    }).then(() => undefined),
   });
 }
 
@@ -288,7 +317,14 @@ client.on(Events.MessageCreate, async message => {
   const content = message.content.trim();
   const command = content.toLowerCase();
   try {
-    await clearAfkStatus(message.author.id, message.guildId ?? undefined);
+    const previousAfk = await getAfkStatus(message.author.id, message.guildId ?? undefined);
+    if (previousAfk) {
+      await clearAfkStatus(message.author.id, message.guildId ?? undefined);
+      await message.reply({
+        embeds: [welcomeBackEmbed(message.author.globalName ?? message.author.username, previousAfk)],
+        allowedMentions: { parse: [], repliedUser: false },
+      });
+    }
     if (command.startsWith(`${prefix}chat`)) return await sendChatFromMessage(message, content.slice(`${prefix}chat`.length));
     if (command === `${prefix}clear`) {
       await handleClearCommand(messageCommandContext(message), false);
@@ -442,6 +478,18 @@ client.on(Events.InteractionCreate, async interaction => {
           messageTimestamp: interaction.createdTimestamp,
           reply: content => interaction.editReply(content) as Promise<Message>,
           edit: content => interaction.editReply(content),
+          onAfkSet: async reason => {
+            await interaction.editReply({
+              embeds: [afkSetEmbed(reason)],
+              allowedMentions: { parse: [], repliedUser: false },
+            });
+          },
+          onWelcomeBack: async status => {
+            await interaction.followUp({
+              embeds: [welcomeBackEmbed(interaction.user.globalName ?? interaction.user.username, status)],
+              allowedMentions: { parse: [], repliedUser: false },
+            });
+          },
         });
       }
     }
