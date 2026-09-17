@@ -42,7 +42,7 @@ function getThreadChannelId(channel: TextBasedChannel): string | undefined {
 
 export async function runChat(args: {
   prompt: string; user: User; member: GuildMember | null; guildId?: string; guildName?: string;
-  channel: TextBasedChannel; channelId: string; sourceMessageId?: string; referencedMessageId?: string;
+  channel: TextBasedChannel; channelId: string; messageTimestamp?: number; sourceMessageId?: string; referencedMessageId?: string;
   reply: (content: string) => Promise<Message>;
   edit?: (content: string) => Promise<unknown>;
 }) {
@@ -75,6 +75,7 @@ export async function runChat(args: {
       guildName: args.guildName ?? "Direct Message",
       settings,
       history,
+      messageTimestamp: args.messageTimestamp ?? Date.now(),
       onDelta: text => { answer += text; },
     });
     const chunks = splitDiscordMessage(answer);
