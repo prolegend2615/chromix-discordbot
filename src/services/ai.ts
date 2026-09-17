@@ -14,6 +14,7 @@ const MAX_OUTPUT_TOKENS: Record<Settings["response_length"], number> = {
   Medium: 1000,
   Detailed: 2500,
 };
+const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 function readGlobalInstructions(): string {
   try {
@@ -22,6 +23,71 @@ function readGlobalInstructions(): string {
     console.warn(`Could not read ${systemInstructionsPath}; using built-in defaults.`, error);
     return "You are a helpful AI assistant in a Discord server.";
   }
+}
+
+async function streamOpenRouter(input: {
+  prompt: string;
+  settings: Settings;
+  history: HistoryMessage[];
+  system: string;
+  onDelta: (text: string) => void;
+}) {
+  if (!config.openrouterApiKey) {
+    throw new Error("OpenRouter is not configured. Add OPENROUTER_API_KEY to the environment and restart the bot.");
+  }
+
+  const response = await fetch(OPENROUTER_CHAT_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.openrouterApiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://github.com/prolegend2615/chromix-discordbot",
+      "X-Title": "Chromix Discord Bot",
+    },
+    body: JSON.stringify({
+      model: input.settings.model,
+      stream: true,
+      max_tokens: MAX_OUTPUT_TOKENS[input.settings.response_length],
+      messages: [
+        { role: "system", content: input.system },
+        ...input.history.map(item => ({ role: item.role, content: item.content })),
+        { role: "user", content: input.prompt },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`OpenRouter request failed (${response.status}): ${details.slice(0, 500)}`);
+  }
+  if (!response.body) throw new Error("OpenRouter returned an empty response stream.");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let done = false;
+
+  const processLine = (line: string) => {
+    if (!line.startsWith("data:")) return;
+    const data = line.slice("data:".length).trim();
+    if (!data || data === "[DONE]") {
+      if (data === "[DONE]") done = true;
+      return;
+    }
+    const chunk = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string | null } }> };
+    const content = chunk.choices?.[0]?.delta?.content;
+    if (content) input.onDelta(content);
+  };
+
+  while (!done) {
+    const { value, done: readerDone } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !readerDone });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) processLine(line.trimEnd());
+    if (readerDone) break;
+  }
+  if (buffer) processLine(buffer.trimEnd());
 }
 
 const personaInstructions: Record<Settings["persona"], string> = {
@@ -75,18 +141,28 @@ export async function streamAnswer(input: {
     return;
   }
 
-  if (!groq) throw new Error("Groq is not configured. Add GROQ_API_KEY to .env and restart the bot.");
-  const stream = await groq.chat.completions.create({
-    model: input.settings.model,
-    stream: true,
-    max_completion_tokens: MAX_OUTPUT_TOKENS[input.settings.response_length],
-    messages: [
-      { role: "system", content: system },
-      ...input.history.map(item => ({ role: item.role, content: item.content })),
-      { role: "user", content: input.prompt },
-    ],
-  });
-  for await (const chunk of stream) {
-    input.onDelta(chunk.choices[0]?.delta?.content ?? "");
+  if (input.settings.provider === "groq") {
+    if (!groq) throw new Error("Groq is not configured. Add GROQ_API_KEY to .env and restart the bot.");
+    const stream = await groq.chat.completions.create({
+      model: input.settings.model,
+      stream: true,
+      max_completion_tokens: MAX_OUTPUT_TOKENS[input.settings.response_length],
+      messages: [
+        { role: "system", content: system },
+        ...input.history.map(item => ({ role: item.role, content: item.content })),
+        { role: "user", content: input.prompt },
+      ],
+    });
+    for await (const chunk of stream) {
+      input.onDelta(chunk.choices[0]?.delta?.content ?? "");
+    }
+    return;
   }
+
+  if (input.settings.provider === "openrouter") {
+    await streamOpenRouter({ ...input, system });
+    return;
+  }
+
+  throw new Error(`Unsupported AI provider: ${input.settings.provider}`);
 }
