@@ -5,7 +5,7 @@ import { checkPromptLimit, isChannelAllowed } from "./access.js";
 import { streamAnswer } from "./ai.js";
 import { recordResponseMetric, resolveThreadConversationKey } from "./metrics.js";
 import { clearAfkStatus, normalizeAfkReason, setAfkStatus } from "./afk.js";
-import { parseSetAfkRequest } from "../logic.js";
+import { parseSetAfkCommand } from "../logic.js";
 
 const activePrompts = new Set<string>();
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -51,13 +51,6 @@ export async function runChat(args: {
   const prompt = args.prompt.trim();
   if (!prompt) throw new Error("Please include a message for me to answer.");
   if (!(await isChannelAllowed(args.guildId, args.channelId))) throw new Error("I am not enabled in this channel.");
-  const afkRequest = parseSetAfkRequest(prompt, args.user.username);
-  if (afkRequest) {
-    const reason = normalizeAfkReason(afkRequest.reason);
-    await setAfkStatus(args.user.id, args.guildId, reason, args.messageTimestamp ?? Date.now());
-    await args.reply(`AFK status set for ${afkRequest.username}. Reason: ${reason}.`);
-    return;
-  }
   await clearAfkStatus(args.user.id, args.guildId);
   const threadId = getThreadChannelId(args.channel);
   const conversationChannelId = threadId ?? args.channelId;
@@ -88,6 +81,12 @@ export async function runChat(args: {
       messageTimestamp: args.messageTimestamp ?? Date.now(),
       onDelta: text => { answer += text; },
     });
+    const afkCommand = parseSetAfkCommand(answer);
+    if (afkCommand) {
+      const reason = normalizeAfkReason(afkCommand.reason);
+      await setAfkStatus(args.user.id, args.guildId, reason, args.messageTimestamp ?? Date.now());
+      answer = `AFK status set. Reason: ${reason}.`;
+    }
     const chunks = splitDiscordMessage(answer);
     const editMessage = args.edit ?? (content => placeholder.edit(content));
     await editMessage(chunks[0]);
