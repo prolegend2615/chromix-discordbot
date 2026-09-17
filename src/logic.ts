@@ -1,6 +1,6 @@
 export const MODELS = {
   gemini: ["gemini-3.6-flash"],
-  groq: ["llama-3.3-70b-versatile", "openai/gpt-oss-20b"],
+  groq: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-20b"],
   openrouter: ["google/gemini-3.6-flash", "deepseek/deepseek-v4-flash", "mistralai/mistral-small-2603"],
 } as const;
 
