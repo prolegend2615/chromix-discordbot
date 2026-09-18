@@ -30,11 +30,10 @@ async function deliverDueReminders() {
           console.error(`Reminder ${reminder.id} could not find a sendable channel; it will be retried.`);
           continue;
         }
-        const send = channel.send as (payload: {
+        await (channel.send as (payload: {
           content: string;
           allowedMentions: { users: string[] };
-        }) => Promise<unknown>;
-        await send({
+        }) => Promise<unknown>).call(channel, {
           content: `<@${reminder.user_id}> ⏰ Reminder: ${reminder.message}`,
           allowedMentions: { users: [reminder.user_id] },
         });
