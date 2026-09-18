@@ -136,6 +136,7 @@ export async function streamAnswer(input: {
       "Replace duration with one positive whole number followed immediately by one unit: s for seconds, m for minutes, or h for hours. Examples: `10s`, `15m`, `2h`.",
       "The maximum duration is 12h (12 hours). Never create or request a duration longer than 12h. If the user asks for more than 12h, do not output the action.",
       "Put the reminder text in the second parentheses. Do not add a username, user ID, date, time, explanation, or any text outside the two parentheses.",
+      "After you output the action, the application will display the confirmation embed. Do not write a confirmation message yourself.",
       "Only use this action when the user clearly wants a future reminder. Do not use it for ordinary requests to tell or say something immediately.",
     ].join("\n")
     : "";
