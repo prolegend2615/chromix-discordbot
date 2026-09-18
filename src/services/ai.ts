@@ -131,6 +131,7 @@ export async function streamAnswer(input: {
   const reminderActionInstruction = input.reminderActionEnabled
     ? [
       "REMINDER ACTION IS AVAILABLE FOR THIS MESSAGE.",
+      "There are no callable tools or functions in this request. Do not emit a tool call, function call, JSON object, XML tag, or structured tool response.",
       "If the user explicitly asks you to remind, notify, alert, ping, tell, say, remember, or otherwise remind them about something later, output ONLY this exact syntax:",
       "`use set_reminder (duration) (message)`",
       "Replace duration with one positive whole number followed immediately by one unit: s for seconds, m for minutes, or h for hours. Examples: `10s`, `15m`, `2h`.",
