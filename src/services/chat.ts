@@ -49,6 +49,7 @@ export async function runChat(args: {
   reply: (content: string) => Promise<Message>;
   edit?: (content: string) => Promise<unknown>;
   onAfkSet?: (reason: string, placeholder: Message) => Promise<void>;
+  onReminderSet?: (seconds: number, message: string, placeholder: Message) => Promise<void>;
   onWelcomeBack?: (status: AfkStatus) => Promise<void>;
 }) {
   const prompt = args.prompt.trim();
@@ -91,14 +92,14 @@ export async function runChat(args: {
     });
     const afkCommand = parseSetAfkCommand(answer);
     const reminderCommand = hasReminderIntent(prompt) ? parseSetReminderCommand(answer) : null;
-    let afkResponseHandled = false;
+    let actionResponseHandled = false;
     if (afkCommand) {
       const reason = normalizeAfkReason(afkCommand.reason);
       await setAfkStatus(args.user.id, args.guildId, reason, args.messageTimestamp ?? Date.now());
       answer = `AFK status set. Reason: ${reason}.`;
       if (args.onAfkSet) {
         await args.onAfkSet(reason, placeholder);
-        afkResponseHandled = true;
+        actionResponseHandled = true;
       }
     }
     if (reminderCommand) {
@@ -115,9 +116,13 @@ export async function runChat(args: {
           now: args.messageTimestamp ?? Date.now(),
         });
         answer = `Reminder set for ${formatReminderDuration(reminder.seconds)}: ${reminder.message}`;
+        if (args.onReminderSet) {
+          await args.onReminderSet(reminder.seconds, reminder.message, placeholder);
+          actionResponseHandled = true;
+        }
       }
     }
-    if (!afkResponseHandled) {
+    if (!actionResponseHandled) {
       const chunks = splitDiscordMessage(answer);
       const editMessage = args.edit ?? (content => placeholder.edit(content));
       await editMessage(chunks[0]);
