@@ -5,7 +5,8 @@ import { checkPromptLimit, isChannelAllowed } from "./access.js";
 import { streamAnswer } from "./ai.js";
 import { recordResponseMetric, resolveThreadConversationKey } from "./metrics.js";
 import { clearAfkStatus, getAfkStatus, normalizeAfkReason, setAfkStatus, type AfkStatus } from "./afk.js";
-import { parseSetAfkCommand } from "../logic.js";
+import { formatReminderDuration, hasReminderIntent, parseReminderDuration, parseSetAfkCommand, parseSetReminderCommand } from "../logic.js";
+import { createReminder } from "./reminders.js";
 
 const activePrompts = new Set<string>();
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -85,9 +86,11 @@ export async function runChat(args: {
       settings,
       history,
       messageTimestamp: args.messageTimestamp ?? Date.now(),
+       reminderActionEnabled: hasReminderIntent(prompt),
       onDelta: text => { answer += text; },
     });
     const afkCommand = parseSetAfkCommand(answer);
+    const reminderCommand = hasReminderIntent(prompt) ? parseSetReminderCommand(answer) : null;
     let afkResponseHandled = false;
     if (afkCommand) {
       const reason = normalizeAfkReason(afkCommand.reason);
@@ -96,6 +99,22 @@ export async function runChat(args: {
       if (args.onAfkSet) {
         await args.onAfkSet(reason, placeholder);
         afkResponseHandled = true;
+      }
+    }
+    if (reminderCommand) {
+      const durationSeconds = parseReminderDuration(reminderCommand.duration);
+      if (durationSeconds === null) {
+        answer = "I could not set that reminder. Reminders must use seconds, minutes, or hours, and cannot be longer than 12 hours.";
+      } else {
+        const reminder = await createReminder({
+          userId: args.user.id,
+          guildId: args.guildId,
+          channelId: args.channelId,
+          duration: reminderCommand.duration,
+          message: reminderCommand.message,
+          now: args.messageTimestamp ?? Date.now(),
+        });
+        answer = `Reminder set for ${formatReminderDuration(reminder.seconds)}: ${reminder.message}`;
       }
     }
     if (!afkResponseHandled) {
