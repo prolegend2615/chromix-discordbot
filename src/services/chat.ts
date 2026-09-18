@@ -91,7 +91,9 @@ export async function runChat(args: {
       onDelta: text => { answer += text; },
     });
     const afkCommand = parseSetAfkCommand(answer);
-    const reminderCommand = hasReminderIntent(prompt) ? parseSetReminderCommand(answer) : null;
+    // Like the AFK protocol, the complete AI action syntax is the execution trigger.
+    // Intent detection only controls whether the extra reminder instructions are sent.
+    const reminderCommand = parseSetReminderCommand(answer);
     let actionResponseHandled = false;
     if (afkCommand) {
       const reason = normalizeAfkReason(afkCommand.reason);
