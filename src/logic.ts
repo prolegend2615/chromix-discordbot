@@ -19,6 +19,10 @@ export function hasTimeWord(text: string) {
   return /\btime\b/i.test(text);
 }
 
+export function hasReminderIntent(text: string) {
+  return /\b(?:remind(?:er|ing)?|remember|forget|notify|notification|alert|ping|tell|say|schedule|nudge|warn)\b|wake\s+me|let\s+me\s+know|message\s+me|don't\s+let\s+me\s+forget|do\s+not\s+let\s+me\s+forget|when\s+(?:it's|it is)\s+time/i.test(text);
+}
+
 export function isTransientNetworkError(error: unknown) {
   const value = error as { code?: unknown } | null;
   const code = typeof value?.code === "string" ? value.code : "";
@@ -34,6 +38,38 @@ export function parseSetAfkCommand(text: string): SetAfkCommand | null {
   const match = /^\s*use\s+set_afk\s*(?:\(([\s\S]*)\))?\s*$/i.exec(text);
   if (!match) return null;
   return { reason: match[1]?.trim() || "None" };
+}
+
+export type SetReminderCommand = {
+  duration: string;
+  message: string;
+};
+
+export function parseSetReminderCommand(text: string): SetReminderCommand | null {
+  const match = /^\s*use\s+set_reminder\s*\(([^)]*)\)\s*\(([\s\S]*)\)\s*$/i.exec(text);
+  if (!match) return null;
+  const duration = match[1].trim();
+  const message = match[2].trim();
+  if (!duration || !message) return null;
+  return { duration, message };
+}
+
+export const MAX_REMINDER_SECONDS = 12 * 60 * 60;
+
+export function parseReminderDuration(value: string): number | null {
+  const match = /^\s*(\d+)\s*([smh])\s*$/i.exec(value);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isSafeInteger(amount) || amount <= 0) return null;
+  const multiplier = match[2].toLowerCase() === "s" ? 1 : match[2].toLowerCase() === "m" ? 60 : 60 * 60;
+  const seconds = amount * multiplier;
+  return seconds <= MAX_REMINDER_SECONDS ? seconds : null;
+}
+
+export function formatReminderDuration(seconds: number) {
+  if (seconds % (60 * 60) === 0) return `${seconds / (60 * 60)}h`;
+  if (seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
 }
 
 export function classifyProviderError(error: unknown): "rate_limit" | "timeout" | "unavailable" | "invalid" | "unknown" {
