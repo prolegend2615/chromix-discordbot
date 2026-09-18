@@ -10,7 +10,7 @@ import { deleteUserDataExceptVip, getSettings, isUserBlacklisted, PERSONAS, rese
 import { getPromptStatus, setChannelRule } from "./services/access.js";
 import { getAverageResponseTime } from "./services/metrics.js";
 import { clearAfkStatus, formatAfkDuration, formatAfkMention, getAfkStatus, type AfkStatus } from "./services/afk.js";
-import { isTransientNetworkError, MODELS, userFacingProviderError } from "./logic.js";
+import { formatReminderDuration, isTransientNetworkError, MODELS, userFacingProviderError } from "./logic.js";
 import { deleteReminder, getDueReminders } from "./services/reminders.js";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
@@ -316,6 +316,15 @@ function afkSetEmbed(reason: string) {
     .setTimestamp();
 }
 
+function reminderSetEmbed(seconds: number, message: string) {
+  return new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle("Reminder set")
+    .setDescription(`⏰ I’ll remind you in **${formatReminderDuration(seconds)}**.`)
+    .addFields({ name: "Message", value: message })
+    .setTimestamp();
+}
+
 function welcomeBackEmbed(displayName: string, status: AfkStatus) {
   return new EmbedBuilder()
     .setColor(0x57F287)
@@ -337,6 +346,10 @@ async function sendChatFromMessage(message: Message, prompt: string, referenceId
     reply: content => message.reply({ content, allowedMentions: { repliedUser: false } }),
     onAfkSet: (reason, placeholder) => placeholder.edit({
       embeds: [afkSetEmbed(reason)],
+      allowedMentions: { parse: [], repliedUser: false },
+    }).then(() => undefined),
+    onReminderSet: (seconds, reminderMessage, placeholder) => placeholder.edit({
+      embeds: [reminderSetEmbed(seconds, reminderMessage)],
       allowedMentions: { parse: [], repliedUser: false },
     }).then(() => undefined),
     onWelcomeBack: status => message.reply({
@@ -524,6 +537,12 @@ client.on(Events.InteractionCreate, async interaction => {
           onAfkSet: async reason => {
             await interaction.editReply({
               embeds: [afkSetEmbed(reason)],
+              allowedMentions: { parse: [], repliedUser: false },
+            });
+          },
+          onReminderSet: async (seconds, reminderMessage) => {
+            await interaction.editReply({
+              embeds: [reminderSetEmbed(seconds, reminderMessage)],
               allowedMentions: { parse: [], repliedUser: false },
             });
           },
