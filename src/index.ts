@@ -52,7 +52,7 @@ async function deliverDueReminders() {
 
 function startReminderScheduler() {
   void deliverDueReminders();
-  setInterval(() => void deliverDueReminders(), 15_000);
+  setInterval(() => void deliverDueReminders(), 1_000);
 }
 
 function isAdmin(member: { permissions: PermissionsBitField } | null) {
