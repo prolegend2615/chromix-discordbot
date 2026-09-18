@@ -11,10 +11,50 @@ import { getPromptStatus, setChannelRule } from "./services/access.js";
 import { getAverageResponseTime } from "./services/metrics.js";
 import { clearAfkStatus, formatAfkDuration, formatAfkMention, getAfkStatus, type AfkStatus } from "./services/afk.js";
 import { isTransientNetworkError, MODELS, userFacingProviderError } from "./logic.js";
+import { deleteReminder, getDueReminders } from "./services/reminders.js";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
 const prefix = "c.";
 const VIP_ADMIN_ID = "1347611715826876496";
+let reminderSweepInProgress = false;
+
+async function deliverDueReminders() {
+  if (reminderSweepInProgress) return;
+  reminderSweepInProgress = true;
+  try {
+    const dueReminders = await getDueReminders();
+    for (const reminder of dueReminders) {
+      try {
+        const channel = await client.channels.fetch(reminder.channel_id);
+        if (!channel || !("send" in channel) || typeof channel.send !== "function") {
+          console.error(`Reminder ${reminder.id} could not find a sendable channel; it will be retried.`);
+          continue;
+        }
+        const send = channel.send as (payload: {
+          content: string;
+          allowedMentions: { users: string[] };
+        }) => Promise<unknown>;
+        await send({
+          content: `<@${reminder.user_id}> ⏰ Reminder: ${reminder.message}`,
+          allowedMentions: { users: [reminder.user_id] },
+        });
+        await deleteReminder(reminder.id);
+      } catch (error) {
+        console.error(`Reminder ${reminder.id} could not be delivered; it will be retried.`, error);
+      }
+    }
+  } catch (error) {
+    console.error("Reminder scheduler sweep failed.", error);
+  } finally {
+    reminderSweepInProgress = false;
+  }
+}
+
+function startReminderScheduler() {
+  void deliverDueReminders();
+  setInterval(() => void deliverDueReminders(), 15_000);
+}
+
 function isAdmin(member: { permissions: PermissionsBitField } | null) {
   return Boolean(member?.permissions.has(PermissionsBitField.Flags.Administrator));
 }
@@ -306,7 +346,10 @@ async function sendChatFromMessage(message: Message, prompt: string, referenceId
   });
 }
 
-client.once(Events.ClientReady, ready => console.log(`Ready as ${ready.user.tag}`));
+client.once(Events.ClientReady, ready => {
+  console.log(`Ready as ${ready.user.tag}`);
+  startReminderScheduler();
+});
 
 client.on(Events.MessageCreate, async message => {
   if (message.author.bot) return;
