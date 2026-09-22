@@ -5,8 +5,9 @@ import { checkPromptLimit, isChannelAllowed } from "./access.js";
 import { streamAnswer } from "./ai.js";
 import { recordResponseMetric, resolveThreadConversationKey } from "./metrics.js";
 import { clearAfkStatus, getAfkStatus, normalizeAfkReason, setAfkStatus, type AfkStatus } from "./afk.js";
-import { formatReminderDuration, hasReminderIntent, parseReminderDuration, parseSetAfkCommand, parseSetReminderCommand } from "../logic.js";
+import { formatReminderDuration, hasReminderIntent, hasTtsIntent, parseReminderDuration, parseSamSpeakCommand, parseSetAfkCommand, parseSetReminderCommand } from "../logic.js";
 import { createReminder } from "./reminders.js";
+import { playTtsInVoiceChannel } from "./tts.js";
 
 const activePrompts = new Set<string>();
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -88,6 +89,7 @@ export async function runChat(args: {
       history,
       messageTimestamp: args.messageTimestamp ?? Date.now(),
        reminderActionEnabled: hasReminderIntent(prompt),
+      ttsActionEnabled: hasTtsIntent(prompt),
       onDelta: text => { answer += text; },
     });
     const afkCommand = parseSetAfkCommand(answer);
@@ -122,6 +124,22 @@ export async function runChat(args: {
           await args.onReminderSet(reminder.seconds, reminder.message, placeholder);
           actionResponseHandled = true;
         }
+      }
+    }
+    const samSpeakCommand = parseSamSpeakCommand(answer);
+    if (samSpeakCommand) {
+      const played = await playTtsInVoiceChannel({
+        member: args.member,
+        guildId: args.guildId ?? "",
+        channelId: args.channelId,
+        text: samSpeakCommand.text,
+      });
+      if (played) {
+        answer = `🔊 Spoke that out loud in your voice channel!`;
+        actionResponseHandled = true;
+      } else {
+        answer = `I tried to speak, but you need to be in a voice channel first. Join one and try again!`;
+        actionResponseHandled = true;
       }
     }
     if (!actionResponseHandled) {

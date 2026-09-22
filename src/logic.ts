@@ -90,3 +90,21 @@ export function userFacingProviderError(error: unknown) {
     default: return "The AI request failed unexpectedly. Please try again.";
   }
 }
+
+// --- SAM TTS Action ---
+
+export type SamSpeakCommand = {
+  text: string;
+};
+
+export function hasTtsIntent(text: string): boolean {
+  return /\b(?:speak|say|tts|voice|read aloud|talk|pronounce|vocalize|robot voice|sam)\b/i.test(text);
+}
+
+export function parseSamSpeakCommand(text: string): SamSpeakCommand | null {
+  const match = /^\s*use\s+sam_speak\s*\(([\s\S]*)\)\s*$/i.exec(text);
+  if (!match) return null;
+  const spokenText = match[1]?.trim();
+  if (!spokenText) return null;
+  return { text: spokenText };
+}
