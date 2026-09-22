@@ -7,7 +7,7 @@ import { recordResponseMetric, resolveThreadConversationKey } from "./metrics.js
 import { clearAfkStatus, getAfkStatus, normalizeAfkReason, setAfkStatus, type AfkStatus } from "./afk.js";
 import { formatReminderDuration, hasReminderIntent, hasTtsIntent, parseReminderDuration, parseSamSpeakCommand, parseSetAfkCommand, parseSetReminderCommand } from "../logic.js";
 import { createReminder } from "./reminders.js";
-import { playTtsInVoiceChannel } from "./tts.js";
+import { sendVoiceMessage } from "./tts.js";
 
 const activePrompts = new Set<string>();
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -128,17 +128,15 @@ export async function runChat(args: {
     }
     const samSpeakCommand = parseSamSpeakCommand(answer);
     if (samSpeakCommand) {
-      const played = await playTtsInVoiceChannel({
-        member: args.member,
-        guildId: args.guildId ?? "",
-        channelId: args.channelId,
+      const sent = await sendVoiceMessage({
+        channel: args.channel,
         text: samSpeakCommand.text,
       });
-      if (played) {
-        answer = `🔊 Spoke that out loud in your voice channel!`;
+      if (sent) {
+        answer = `🔊 Sent a voice message!`;
         actionResponseHandled = true;
       } else {
-        answer = `I tried to speak, but you need to be in a voice channel first. Join one and try again!`;
+        answer = `I couldn't send the voice message in this channel.`;
         actionResponseHandled = true;
       }
     }

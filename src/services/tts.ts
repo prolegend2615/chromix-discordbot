@@ -1,13 +1,5 @@
 import SamJs from "sam-js";
-import {
-  joinVoiceChannel,
-  createAudioPlayer,
-  createAudioResource,
-  AudioPlayerStatus,
-  type VoiceConnection,
-} from "@discordjs/voice";
-import { Readable } from "node:stream";
-import type { TextBasedChannel, GuildMember } from "discord.js";
+import type { TextBasedChannel } from "discord.js";
 
 const sam = new SamJs({ pitch: 64, speed: 72 });
 
@@ -51,65 +43,33 @@ export function generateSamWav(text: string): Buffer {
 }
 
 /**
- * Play SAM-generated TTS audio in the voice channel the member is currently in.
- * Returns true if playback completed successfully, false otherwise.
+ * Send a SAM-generated voice message as an audio file attachment in the text channel.
+ * Discord renders .wav/.ogg attachments as playable inline audio bubbles.
+ * Returns true if sent successfully, false otherwise.
  */
-export async function playTtsInVoiceChannel(args: {
-  member: GuildMember | null;
-  guildId: string;
-  channelId: string;
+export async function sendVoiceMessage(args: {
+  channel: TextBasedChannel;
   text: string;
 }): Promise<boolean> {
-  const { member, guildId, channelId, text } = args;
+  const { channel, text } = args;
 
-  if (!member?.voice?.channel) {
+  if (!("send" in channel) || typeof channel.send !== "function") {
     return false;
   }
 
-  const voiceChannel = member.voice.channel;
-  const wavBuffer = generateSamWav(text);
-
-  let connection: VoiceConnection | undefined;
   try {
-    connection = joinVoiceChannel({
-      channelId: voiceChannel.id,
-      guildId,
-      adapterCreator: voiceChannel.guild.voiceAdapterCreator as any,
-      selfDeaf: false,
-      selfMute: false,
-    });
+    const wavBuffer = generateSamWav(text);
 
-    const player = createAudioPlayer();
-    const stream = Readable.from(wavBuffer);
-    const resource = createAudioResource(stream, { inlineVolume: false });
-
-    connection.subscribe(player);
-    player.play(resource);
-
-    // Wait for playback to finish or error
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("TTS playback timed out after 30 seconds."));
-      }, 30_000);
-
-      player.on(AudioPlayerStatus.Idle, () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-
-      player.on("error", (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      });
+    await (channel.send as (payload: unknown) => Promise<unknown>)({
+      files: [{
+        attachment: wavBuffer,
+        name: "voice-message.wav",
+      }],
     });
 
     return true;
   } catch (error) {
-    console.error("[TTS] Playback failed:", error);
+    console.error("[TTS] Failed to send voice message:", error);
     return false;
-  } finally {
-    if (connection) {
-      try { connection.destroy(); } catch {}
-    }
   }
 }
