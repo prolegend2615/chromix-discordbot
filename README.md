@@ -28,3 +28,7 @@ Edit [`system-instructions.txt`](system-instructions.txt) to control how the AI 
 - `/give-vip @user` (restricted to the configured owner ID)
 - `c.listen [channel]` / `/listen` (server administrators)
 - `c.ignore [channel]` / `/ignore` (server administrators)
+
+## Flux TTS voice replies
+
+Set OPENROUTER_API_KEY to enable Deepgram Flux TTS voice replies through OpenRouter. Set OPENROUTER_TTS_VOICE to choose a supported Flux voice; the default is flux-alexis-en. Voice requests in the same channel are reserved and processed in FIFO order. The bot displays “Generating voice…” while waiting, tries Flux first, and automatically falls back to the local SAM WAV voice if Flux or delivery fails.
