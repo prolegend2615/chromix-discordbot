@@ -7,7 +7,7 @@ import { recordResponseMetric, resolveThreadConversationKey } from "./metrics.js
 import { clearAfkStatus, getAfkStatus, normalizeAfkReason, setAfkStatus, type AfkStatus } from "./afk.js";
 import { formatReminderDuration, hasReminderIntent, hasTtsIntent, parseReminderDuration, parseSamSpeakCommand, parseSetAfkCommand, parseSetReminderCommand } from "../logic.js";
 import { createReminder } from "./reminders.js";
-import { sendVoiceMessage } from "./tts.js";
+import { reserveVoiceMessage, type VoiceReservation } from "./tts.js";
 
 const activePrompts = new Set<string>();
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -71,6 +71,12 @@ export async function runChat(args: {
   try {
     if ("sendTyping" in args.channel) await args.channel.sendTyping();
     const placeholder = await args.reply("Thinking…");
+    const editResponse = args.edit ?? (content => placeholder.edit(content));
+    let voiceReservation: VoiceReservation | undefined;
+    if (hasTtsIntent(prompt)) {
+      voiceReservation = reserveVoiceMessage({ channel: args.channel, channelId: args.channelId });
+      await editResponse("Generating voice…").catch(() => undefined);
+    }
     if (existingAfk) await args.onWelcomeBack?.(existingAfk);
     const settings = await getSettings(args.user.id, args.guildId);
     const history = await getHistory(args.user.id, args.guildId, conversationChannelId, settings.vip ? 12 : 5);
@@ -127,22 +133,17 @@ export async function runChat(args: {
       }
     }
     const samSpeakCommand = parseSamSpeakCommand(answer);
-    if (samSpeakCommand) {
-      const sent = await sendVoiceMessage({
-        channel: args.channel,
-        text: samSpeakCommand.text,
-      });
-      if (sent) {
-        answer = `🔊 Sent a voice message!`;
-        actionResponseHandled = true;
-      } else {
-        answer = `I couldn't send the voice message in this channel.`;
+      if (samSpeakCommand) {
+        const reservation = voiceReservation ?? reserveVoiceMessage({ channel: args.channel, channelId: args.channelId });
+        if (!voiceReservation) await editResponse("Generating voice…").catch(() => undefined);
+        const sent = await reservation.complete(samSpeakCommand.text);
+        answer = sent ? "🔊 Sent a voice message!" : "I couldn't send the voice message in this channel.";
+        await editResponse(answer).catch(() => undefined);
         actionResponseHandled = true;
       }
-    }
-    if (!actionResponseHandled) {
+        if (!actionResponseHandled) {
       const chunks = splitDiscordMessage(answer);
-      const editMessage = args.edit ?? (content => placeholder.edit(content));
+      const editMessage = editResponse;
       await editMessage(chunks[0]);
       if (chunks.length > 1) {
         const sendableChannel = args.channel;
@@ -159,6 +160,7 @@ export async function runChat(args: {
     await addHistory(args.user.id, args.guildId, conversationChannelId, { role: "user", content: prompt }, args.sourceMessageId, args.referencedMessageId);
     await addHistory(args.user.id, args.guildId, conversationChannelId, { role: "assistant", content: answer }, placeholder.id);
   } finally {
+    voiceReservation?.cancel();
     activePrompts.delete(key);
   }
 }
