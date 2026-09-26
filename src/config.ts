@@ -13,4 +13,5 @@ export const config = {
   geminiApiKey: required("GEMINI_API_KEY"),
   groqApiKey: process.env.GROQ_API_KEY,
   openrouterApiKey: process.env.OPENROUTER_API_KEY,
+  openrouterTtsVoice: process.env.OPENROUTER_TTS_VOICE ?? "flux-alexis-en",
 };
