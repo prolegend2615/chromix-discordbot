@@ -68,11 +68,11 @@ export async function runChat(args: {
   if (!limit.ok) throw new Error(limit.message);
 
   activePrompts.add(key);
+  let voiceReservation: VoiceReservation | undefined;
   try {
     if ("sendTyping" in args.channel) await args.channel.sendTyping();
     const placeholder = await args.reply("Thinking…");
     const editResponse = args.edit ?? (content => placeholder.edit(content));
-    let voiceReservation: VoiceReservation | undefined;
     if (hasTtsIntent(prompt)) {
       voiceReservation = reserveVoiceMessage({ channel: args.channel, channelId: args.channelId });
       await editResponse("Generating voice…").catch(() => undefined);
