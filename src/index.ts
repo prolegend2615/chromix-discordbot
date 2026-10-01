@@ -10,7 +10,7 @@ import { deleteUserDataExceptVip, getSettings, isUserBlacklisted, PERSONAS, rese
 import { getPromptStatus, setChannelRule } from "./services/access.js";
 import { getAverageResponseTime } from "./services/metrics.js";
 import { clearAfkStatus, formatAfkDuration, formatAfkMention, getAfkStatus, type AfkStatus } from "./services/afk.js";
-import { formatReminderDuration, isTransientNetworkError, MODELS, userFacingProviderError } from "./logic.js";
+import { extractMentionId, formatReminderDuration, isTransientNetworkError, MODELS, userFacingProviderError } from "./logic.js";
 import { deleteReminder, getDueReminders } from "./services/reminders.js";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
@@ -336,6 +336,37 @@ function welcomeBackEmbed(displayName: string, status: AfkStatus) {
     .setTimestamp();
 }
 
+function avatarEmbed(user: User): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle(`${user.displayName}'s avatar`)
+    .setImage(user.displayAvatarURL({ size: 1024 }))
+    .setTimestamp();
+}
+
+async function findUserById(id: string): Promise<User | null> {
+  try {
+    return await client.users.fetch(id);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolves which user's avatar the AI asked for. The target is either a
+ * mention tag (<@123>/<@!123>) naming another user, or "me"/"self" for the
+ * requester's own avatar. Falls back to the requester when the mention cannot
+ * be resolved.
+ */
+async function resolveAvatarUser(target: string, requester: User): Promise<User> {
+  const mentionId = extractMentionId(target);
+  if (mentionId) {
+    const resolved = await findUserById(mentionId);
+    if (resolved) return resolved;
+  }
+  return requester;
+}
+
 async function sendChatFromMessage(message: Message, prompt: string, referenceId?: string) {
   await runChat({
     prompt, user: message.author, member: message.member, guildId: message.guildId ?? undefined,
@@ -351,6 +382,13 @@ async function sendChatFromMessage(message: Message, prompt: string, referenceId
       embeds: [reminderSetEmbed(seconds, reminderMessage)],
       allowedMentions: { parse: [], repliedUser: false },
     }).then(() => undefined),
+    onAvatar: async (target, placeholder) => {
+      const avatarUser = await resolveAvatarUser(target, message.author);
+      await placeholder.edit({
+        embeds: [avatarEmbed(avatarUser)],
+        allowedMentions: { parse: [], repliedUser: false },
+      });
+    },
     onWelcomeBack: status => message.reply({
       embeds: [welcomeBackEmbed(message.author.globalName ?? message.author.username, status)],
       allowedMentions: { parse: [], repliedUser: false },
@@ -542,6 +580,13 @@ client.on(Events.InteractionCreate, async interaction => {
           onReminderSet: async (seconds, reminderMessage) => {
             await interaction.editReply({
               embeds: [reminderSetEmbed(seconds, reminderMessage)],
+              allowedMentions: { parse: [], repliedUser: false },
+            });
+          },
+          onAvatar: async target => {
+            const avatarUser = await resolveAvatarUser(target, interaction.user);
+            await interaction.editReply({
+              embeds: [avatarEmbed(avatarUser)],
               allowedMentions: { parse: [], repliedUser: false },
             });
           },

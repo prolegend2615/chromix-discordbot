@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { classifyProviderError, formatReminderDuration, hasReminderIntent, hasTimeWord, isModelAvailable, isTransientNetworkError, parsePrefixCommand, parseReminderDuration, parseSetAfkCommand, parseSetReminderCommand, userFacingProviderError } from "../src/logic.js";
+import { classifyProviderError, extractMentionId, formatReminderDuration, hasAvatarIntent, hasReminderIntent, hasTimeWord, isModelAvailable, isTransientNetworkError, parsePrefixCommand, parseReminderDuration, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand, userFacingProviderError } from "../src/logic.js";
 
 test("parses prefix commands and arguments case-insensitively", () => {
   assert.deepEqual(parsePrefixCommand("  C.CHAT hello world"), { name: "chat", args: ["hello", "world"] });
@@ -62,6 +62,28 @@ test("parses and limits the AI reminder action protocol", () => {
   assert.equal(parseReminderDuration("13h"), null);
   assert.equal(parseReminderDuration("0m"), null);
   assert.equal(formatReminderDuration(7200), "2h");
+});
+
+test("recognizes avatar / profile picture intent", () => {
+  assert.equal(hasAvatarIntent("show me my avatar"), true);
+  assert.equal(hasAvatarIntent("show my pfp"), true);
+  assert.equal(hasAvatarIntent("what is your profile picture"), true);
+  assert.equal(hasAvatarIntent("tell me a joke"), false);
+});
+
+test("extracts user IDs from Discord mention tags", () => {
+  assert.equal(extractMentionId("<@123456789012345678>"), "123456789012345678");
+  assert.equal(extractMentionId("<@!987654321098765432>"), "987654321098765432");
+  assert.equal(extractMentionId("no mention here"), null);
+});
+
+test("parses the AI avatar action protocol", () => {
+  assert.deepEqual(parseShowAvatarCommand("use show_avatar (me)"), { target: "me" });
+  assert.deepEqual(parseShowAvatarCommand("use show_avatar (self)"), { target: "self" });
+  assert.deepEqual(parseShowAvatarCommand("use show_avatar (<@123456789012345678>)"), { target: "<@123456789012345678>" });
+  assert.deepEqual(parseShowAvatarCommand("use show_avatar ()"), { target: "me" });
+  assert.equal(parseShowAvatarCommand("show me my avatar please"), null);
+  assert.equal(parseShowAvatarCommand("use show_avatar (me) and then say hi"), null);
 });
 
 test("classifies provider failures", () => {

@@ -29,6 +29,12 @@ Edit [`system-instructions.txt`](system-instructions.txt) to control how the AI 
 - `c.listen [channel]` / `/listen` (server administrators)
 - `c.ignore [channel]` / `/ignore` (server administrators)
 
+## AI actions (through chat)
+
+- **AFK** — ask the bot to set your AFK status, e.g. `set my afk status, reason: done for the day`.
+- **Reminder** — ask the bot to remind you later, e.g. `remind me in 15 minutes to check the oven`.
+- **Avatar** — ask the bot to show an avatar or profile picture, e.g. `show me my avatar` or `show the avatar of @user`. To see someone else's avatar, **mention (ping) them** in the message; if you ask for another member's avatar without pinging anyone, the bot will ask you to ping them.
+
 ## Flux TTS voice replies
 
 Set OPENROUTER_API_KEY to enable Deepgram Flux TTS voice replies through OpenRouter. Set OPENROUTER_TTS_VOICE to choose a supported Flux voice; the default is flux-alexis-en. Voice requests in the same channel are reserved and processed in FIFO order. The bot displays “Generating voice…” while waiting, tries Flux first, and automatically falls back to the local SAM WAV voice if Flux or delivery fails.

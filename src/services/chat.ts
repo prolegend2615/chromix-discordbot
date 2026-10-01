@@ -5,7 +5,7 @@ import { checkPromptLimit, isChannelAllowed } from "./access.js";
 import { streamAnswer } from "./ai.js";
 import { recordResponseMetric, resolveThreadConversationKey } from "./metrics.js";
 import { clearAfkStatus, getAfkStatus, normalizeAfkReason, setAfkStatus, type AfkStatus } from "./afk.js";
-import { formatReminderDuration, hasReminderIntent, hasTtsIntent, parseReminderDuration, parseSamSpeakCommand, parseSetAfkCommand, parseSetReminderCommand } from "../logic.js";
+import { formatReminderDuration, hasReminderIntent, hasTtsIntent, parseReminderDuration, parseSamSpeakCommand, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand } from "../logic.js";
 import { createReminder } from "./reminders.js";
 import { reserveVoiceMessage, type VoiceReservation } from "./tts.js";
 
@@ -51,6 +51,7 @@ export async function runChat(args: {
   edit?: (content: string) => Promise<unknown>;
   onAfkSet?: (reason: string, placeholder: Message) => Promise<void>;
   onReminderSet?: (seconds: number, message: string, placeholder: Message) => Promise<void>;
+  onAvatar?: (target: string, placeholder: Message) => Promise<void>;
   onWelcomeBack?: (status: AfkStatus) => Promise<void>;
 }) {
   const prompt = args.prompt.trim();
@@ -102,6 +103,7 @@ export async function runChat(args: {
     // Like the AFK protocol, the complete AI action syntax is the execution trigger.
     // Intent detection only controls whether the extra reminder instructions are sent.
     const reminderCommand = parseSetReminderCommand(answer);
+    const avatarCommand = parseShowAvatarCommand(answer);
     let actionResponseHandled = false;
     if (afkCommand) {
       const reason = normalizeAfkReason(afkCommand.reason);
@@ -141,6 +143,13 @@ export async function runChat(args: {
         await editResponse(answer).catch(() => undefined);
         actionResponseHandled = true;
       }
+    if (avatarCommand) {
+      answer = "Here is the avatar you asked for.";
+      if (args.onAvatar) {
+        await args.onAvatar(avatarCommand.target, placeholder);
+        actionResponseHandled = true;
+      }
+    }
         if (!actionResponseHandled) {
       const chunks = splitDiscordMessage(answer);
       const editMessage = editResponse;

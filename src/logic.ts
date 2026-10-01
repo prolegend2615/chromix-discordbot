@@ -108,3 +108,34 @@ export function parseSamSpeakCommand(text: string): SamSpeakCommand | null {
   if (!spokenText) return null;
   return { text: spokenText };
 }
+
+// --- Avatar Action ---
+
+export type ShowAvatarCommand = {
+  target: string;
+};
+
+export function hasAvatarIntent(text: string): boolean {
+  return /\b(?:avatar|profile\s*pic(?:ture)?|pfp|profile\s*photo|display\s*picture|profile\s*image|dp)\b/i.test(text);
+}
+
+/** Extracts a Discord user ID from a mention tag like <@123> or <@!123>. */
+export function extractMentionId(text: string): string | null {
+  const match = /<@!?(\d+)>\s*$/i.exec(text);
+  if (match) return match[1];
+  const anywhere = /<@!?(\d+)>/i.exec(text);
+  return anywhere ? anywhere[1] : null;
+}
+
+/**
+ * Parses the AI avatar action protocol. The target inside the parentheses is
+ * either a mention tag (<@123> / <@!123>) naming another user, or "me"/"self"
+ * for the requester's own avatar. Defaults to "me" when empty.
+ */
+export function parseShowAvatarCommand(text: string): ShowAvatarCommand | null {
+  const match = /^\s*use\s+show_avatar\s*(?:\(([\s\S]*)\))?\s*$/i.exec(text);
+  if (!match) return null;
+  const raw = match[1]?.trim() || "";
+  const target = raw || "me";
+  return { target };
+}

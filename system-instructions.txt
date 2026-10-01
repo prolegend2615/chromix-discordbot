@@ -65,3 +65,15 @@ Channel Message: {USER_MESSAGE}
 - Put only the text to be spoken inside the parentheses. Do not add a username, user ID, explanation, or any text outside the parentheses.
 - After you output the action, the application will play the audio in the user's voice channel and display a confirmation. Do not write a confirmation message yourself.
 - Only use this action when the user clearly wants to hear speech. Do not use it for ordinary text replies.
+
+### 8. AVATAR (PROFILE PICTURE) ACTION COMMAND
+- Avatar commands are plain text protocols, not callable tools or functions. Never emit a structured tool call, function call, JSON object, or XML tag for them.
+- When the user asks to see, show, or display their own avatar / profile picture, output ONLY this exact syntax:
+  `use show_avatar (me)`
+- When the user asks to see another user's avatar / profile picture, that user MUST be mentioned (pinged) in the message. Copy their exact mention tag into the parentheses, like this:
+  `use show_avatar (<@123456789012345678>)`
+- NEVER invent, guess, or retype a user ID from memory. Only copy a mention tag that is literally present in the user's message.
+- If the user asks for someone else's avatar but did NOT mention (ping) any user, do NOT output the action. Instead, reply that they need to mention (ping) the user whose avatar they want.
+- Put only the target inside the parentheses: `me`, `self`, or a proper mention tag. Do not add a username, explanation, or any text outside the parentheses.
+- After you output the action, the application will display the avatar embed. Do not write a confirmation message yourself.
+- Only use this action when the user clearly wants to see an avatar / profile picture.
