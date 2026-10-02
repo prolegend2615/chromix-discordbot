@@ -193,3 +193,32 @@ export function evaluateImageGenerationQuota(input: {
   }
   return { allowed: true };
 }
+
+// --- Rock, Paper, Scissors Action ---
+
+export type RockPaperScissorsMove = "rock" | "paper" | "scissors";
+export type RockPaperScissorsWinner = "player" | "bot" | "tie";
+
+/** Detect requests to start a game, not questions about the game's rules. */
+export function hasRockPaperScissorsIntent(text: string): boolean {
+  if (/^\s*(?:how|what|when|where)\b/i.test(text)) return false;
+  return /\b(?:play|start|challenge)\b[\s\S]{0,60}\b(?:rock[\s,/-]+paper[\s,/-]+scissors?|rps)\b/i.test(text);
+}
+
+/** Parses the AI action used to open a button-based game. */
+export function parseRockPaperScissorsCommand(text: string): { action: "start" } | null {
+  return /^\s*use\s+rock_paper_scissors\s*$/i.test(text) ? { action: "start" } : null;
+}
+
+export function getRockPaperScissorsWinner(
+  playerMove: RockPaperScissorsMove,
+  botMove: RockPaperScissorsMove,
+): RockPaperScissorsWinner {
+  if (playerMove === botMove) return "tie";
+  if (
+    (playerMove === "rock" && botMove === "scissors")
+    || (playerMove === "paper" && botMove === "rock")
+    || (playerMove === "scissors" && botMove === "paper")
+  ) return "player";
+  return "bot";
+}

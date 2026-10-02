@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { classifyProviderError, evaluateImageGenerationQuota, extractMentionId, formatReminderDuration, hasAvatarIntent, hasImageGenerationIntent, hasReminderIntent, hasTimeWord, isModelAvailable, isTransientNetworkError, parseGenerateImageCommand, parsePrefixCommand, parseReminderDuration, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand, userFacingProviderError } from "../src/logic.js";
+import { classifyProviderError, evaluateImageGenerationQuota, extractMentionId, formatReminderDuration, getRockPaperScissorsWinner, hasAvatarIntent, hasImageGenerationIntent, hasReminderIntent, hasRockPaperScissorsIntent, hasTimeWord, isModelAvailable, isTransientNetworkError, parseGenerateImageCommand, parsePrefixCommand, parseReminderDuration, parseRockPaperScissorsCommand, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand, userFacingProviderError } from "../src/logic.js";
 
 test("parses prefix commands and arguments case-insensitively", () => {
   assert.deepEqual(parsePrefixCommand("  C.CHAT hello world"), { name: "chat", args: ["hello", "world"] });
@@ -132,4 +132,28 @@ test("classifies provider failures", () => {
   assert.equal(classifyProviderError(new Error("HTTP 429 rate limit")), "rate_limit");
   assert.equal(classifyProviderError(new Error("request timed out")), "timeout");
   assert.match(userFacingProviderError(new Error("503 unavailable")), /temporarily unavailable/);
+});
+
+test("detects start-game requests without mistaking rules questions for requests", () => {
+  assert.equal(hasRockPaperScissorsIntent("let play rock paper scissors"), true);
+  assert.equal(hasRockPaperScissorsIntent("Can we play Rock, Paper, Scissors?"), true);
+  assert.equal(hasRockPaperScissorsIntent("Start a game of RPS"), true);
+  assert.equal(hasRockPaperScissorsIntent("How do you play rock paper scissors?"), false);
+  assert.equal(hasRockPaperScissorsIntent("What are the rules of rock paper scissors?"), false);
+});
+
+test("parses only the exact Rock, Paper, Scissors game action", () => {
+  assert.deepEqual(parseRockPaperScissorsCommand("use rock_paper_scissors"), { action: "start" });
+  assert.deepEqual(parseRockPaperScissorsCommand(" USE ROCK_PAPER_SCISSORS "), { action: "start" });
+  assert.equal(parseRockPaperScissorsCommand("use rock_paper_scissors then say hello"), null);
+});
+
+test("resolves all Rock, Paper, Scissors round outcomes", () => {
+  assert.equal(getRockPaperScissorsWinner("rock", "scissors"), "player");
+  assert.equal(getRockPaperScissorsWinner("paper", "rock"), "player");
+  assert.equal(getRockPaperScissorsWinner("scissors", "paper"), "player");
+  assert.equal(getRockPaperScissorsWinner("scissors", "rock"), "bot");
+  assert.equal(getRockPaperScissorsWinner("rock", "paper"), "bot");
+  assert.equal(getRockPaperScissorsWinner("paper", "scissors"), "bot");
+  assert.equal(getRockPaperScissorsWinner("rock", "rock"), "tie");
 });
