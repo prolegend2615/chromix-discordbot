@@ -70,8 +70,10 @@ async function reserveImageGeneration(guildId: string, now = Date.now()): Promis
         guildId,
         now,
       );
+      const eventId = inserted.lastID;
+      if (typeof eventId !== "number") throw new Error("Image generation quota reservation failed.");
       await db.exec("COMMIT");
-      return { allowed: true, eventId: inserted.lastID };
+      return { allowed: true, eventId };
     } catch (error) {
       await db.exec("ROLLBACK").catch(() => undefined);
       throw error;
