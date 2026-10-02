@@ -5,9 +5,10 @@ import { checkPromptLimit, isChannelAllowed } from "./access.js";
 import { streamAnswer } from "./ai.js";
 import { recordResponseMetric, resolveThreadConversationKey } from "./metrics.js";
 import { clearAfkStatus, getAfkStatus, normalizeAfkReason, setAfkStatus, type AfkStatus } from "./afk.js";
-import { formatReminderDuration, hasReminderIntent, hasTtsIntent, parseReminderDuration, parseSamSpeakCommand, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand } from "../logic.js";
+import { formatReminderDuration, hasImageGenerationIntent, hasReminderIntent, hasTtsIntent, parseGenerateImageCommand, parseReminderDuration, parseSamSpeakCommand, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand } from "../logic.js";
 import { createReminder } from "./reminders.js";
 import { reserveVoiceMessage, type VoiceReservation } from "./tts.js";
+import { generateGuildImage } from "./image-generation.js";
 
 const activePrompts = new Set<string>();
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -56,6 +57,9 @@ export async function runChat(args: {
 }) {
   const prompt = args.prompt.trim();
   if (!prompt) throw new Error("Please include a message for me to answer.");
+  if (hasImageGenerationIntent(prompt) && !args.guildId) {
+    throw new Error("Image generation is only available in a Discord server, not in direct messages.");
+  }
   if (!(await isChannelAllowed(args.guildId, args.channelId))) throw new Error("I am not enabled in this channel.");
   const existingAfk = await getAfkStatus(args.user.id, args.guildId);
   if (existingAfk) {
@@ -97,6 +101,7 @@ export async function runChat(args: {
       messageTimestamp: args.messageTimestamp ?? Date.now(),
        reminderActionEnabled: hasReminderIntent(prompt),
       ttsActionEnabled: hasTtsIntent(prompt),
+      imageGenerationActionEnabled: hasImageGenerationIntent(prompt),
       onDelta: text => { answer += text; },
     });
     const afkCommand = parseSetAfkCommand(answer);
@@ -104,6 +109,7 @@ export async function runChat(args: {
     // Intent detection only controls whether the extra reminder instructions are sent.
     const reminderCommand = parseSetReminderCommand(answer);
     const avatarCommand = parseShowAvatarCommand(answer);
+    const imageCommand = parseGenerateImageCommand(answer);
     let actionResponseHandled = false;
     if (afkCommand) {
       const reason = normalizeAfkReason(afkCommand.reason);
@@ -143,6 +149,29 @@ export async function runChat(args: {
         await editResponse(answer).catch(() => undefined);
         actionResponseHandled = true;
       }
+    if (imageCommand) {
+      if (!args.guildId) {
+        answer = "Image generation is only available in a Discord server, not in direct messages.";
+        await editResponse(answer).catch(() => undefined);
+        actionResponseHandled = true;
+      } else {
+        await editResponse("Generating image…").catch(() => undefined);
+        try {
+          const generated = await generateGuildImage(args.guildId, imageCommand.prompt);
+          answer = `Generated image: ${imageCommand.prompt}`;
+          await placeholder.edit({
+            content: "Here is your generated image.",
+            files: [{ attachment: generated.buffer, name: `chromix-image.${generated.extension}` }],
+            allowedMentions: { parse: [], repliedUser: false },
+          });
+          actionResponseHandled = true;
+        } catch (error) {
+          answer = error instanceof Error ? error.message : "Image generation failed. Please try again.";
+          await editResponse(answer).catch(() => undefined);
+          actionResponseHandled = true;
+        }
+      }
+    }
     if (avatarCommand) {
       answer = "Here is the avatar you asked for.";
       if (args.onAvatar) {

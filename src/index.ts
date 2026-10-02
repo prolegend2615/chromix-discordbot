@@ -302,6 +302,7 @@ function helpEmbed() {
       { name: "Settings", value: "`/settings` or `c.settings` — configure provider, model, response length, safety, instructions, and persona.\n`/persona` — quickly choose or write a custom persona." },
       { name: "History", value: "`/clear` removes history in this channel. Thread chats get their own persistent conversation history. `/reset` also resets your settings. `/delete-my-data` removes stored data but keeps VIP." },
       { name: "Limits", value: "8 prompts per minute, with a 5-second cooldown. VIP users receive 12 history messages; others receive 5." },
+      { name: "Image generation", value: "Ask me to create an image in a server chat. Each server can generate 3 images every 15 minutes and 50 per UTC day. Image generation is unavailable in DMs." },
       { name: "Server admins", value: "`/listen` and `/ignore` control which channels allow the bot." },
     );
 }

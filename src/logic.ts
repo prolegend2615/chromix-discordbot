@@ -139,3 +139,57 @@ export function parseShowAvatarCommand(text: string): ShowAvatarCommand | null {
   const target = raw || "me";
   return { target };
 }
+
+// --- Image Generation Action ---
+
+export type GenerateImageCommand = {
+  prompt: string;
+};
+
+export const IMAGE_GENERATION_WINDOW_MS = 15 * 60 * 1000;
+export const IMAGE_GENERATIONS_PER_WINDOW = 3;
+export const IMAGE_GENERATIONS_PER_UTC_DAY = 50;
+
+/** Detect requests to create a new image, not requests to view an existing avatar. */
+export function hasImageGenerationIntent(text: string): boolean {
+  const explicitImageRequest = /\b(?:generate|create|make|draw|paint|illustrate|render|design)\b[\s\S]{0,80}\b(?:images?|pictures?|illustrations?|artworks?|art|photos?|wallpapers?|logos?|posters?|memes?|icons?|avatars?|portraits?|scenes?|landscapes?|profile\s*(?:pictures?|photos?|images?|pics?))\b/i;
+  const drawingRequest = /\b(?:draw|paint|illustrate)\b/i;
+  return explicitImageRequest.test(text) || drawingRequest.test(text);
+}
+
+/** Parses the AI action format used to request one generated image. */
+export function parseGenerateImageCommand(text: string): GenerateImageCommand | null {
+  const match = /^\s*use\s+generate_image\s*\(([\s\S]*)\)\s*$/i.exec(text);
+  if (!match) return null;
+  const prompt = match[1]?.trim().replace(/\s+/g, " ");
+  if (!prompt) return null;
+  return { prompt: prompt.slice(0, 1200) };
+}
+
+export type ImageQuotaDecision =
+  | { allowed: true }
+  | { allowed: false; reason: "window" | "daily"; retryAt: number };
+
+export function evaluateImageGenerationQuota(input: {
+  requestsInWindow: number;
+  imagesToday: number;
+  oldestRequestAt: number | null;
+  now: number;
+}): ImageQuotaDecision {
+  if (input.imagesToday >= IMAGE_GENERATIONS_PER_UTC_DAY) {
+    const date = new Date(input.now);
+    return {
+      allowed: false,
+      reason: "daily",
+      retryAt: Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + 1),
+    };
+  }
+  if (input.requestsInWindow >= IMAGE_GENERATIONS_PER_WINDOW) {
+    return {
+      allowed: false,
+      reason: "window",
+      retryAt: (input.oldestRequestAt ?? input.now) + IMAGE_GENERATION_WINDOW_MS + 1,
+    };
+  }
+  return { allowed: true };
+}

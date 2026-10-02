@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { classifyProviderError, extractMentionId, formatReminderDuration, hasAvatarIntent, hasReminderIntent, hasTimeWord, isModelAvailable, isTransientNetworkError, parsePrefixCommand, parseReminderDuration, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand, userFacingProviderError } from "../src/logic.js";
+import { classifyProviderError, evaluateImageGenerationQuota, extractMentionId, formatReminderDuration, hasAvatarIntent, hasImageGenerationIntent, hasReminderIntent, hasTimeWord, isModelAvailable, isTransientNetworkError, parseGenerateImageCommand, parsePrefixCommand, parseReminderDuration, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand, userFacingProviderError } from "../src/logic.js";
 
 test("parses prefix commands and arguments case-insensitively", () => {
   assert.deepEqual(parsePrefixCommand("  C.CHAT hello world"), { name: "chat", args: ["hello", "world"] });
@@ -84,6 +84,48 @@ test("parses the AI avatar action protocol", () => {
   assert.deepEqual(parseShowAvatarCommand("use show_avatar ()"), { target: "me" });
   assert.equal(parseShowAvatarCommand("show me my avatar please"), null);
   assert.equal(parseShowAvatarCommand("use show_avatar (me) and then say hi"), null);
+});
+
+test("recognizes image creation requests without treating avatar display as image generation", () => {
+  assert.equal(hasImageGenerationIntent("create an image of a red fox"), true);
+  assert.equal(hasImageGenerationIntent("create images for my server"), true);
+  assert.equal(hasImageGenerationIntent("draw a tiny castle on a cloud"), true);
+  assert.equal(hasImageGenerationIntent("make me a new avatar"), true);
+  assert.equal(hasImageGenerationIntent("show me my avatar"), false);
+  assert.equal(hasImageGenerationIntent("what is image generation?"), false);
+});
+
+test("parses only a complete image generation action", () => {
+  assert.deepEqual(parseGenerateImageCommand("use generate_image (a fox in a blue forest)"), {
+    prompt: "a fox in a blue forest",
+  });
+  assert.deepEqual(parseGenerateImageCommand("use generate_image (a tiny (storybook) fox)"), {
+    prompt: "a tiny (storybook) fox",
+  });
+  assert.equal(parseGenerateImageCommand("use generate_image ()"), null);
+  assert.equal(parseGenerateImageCommand("use generate_image (fox) then say hello"), null);
+});
+
+test("enforces per-server rolling and UTC-day image limits", () => {
+  const now = Date.UTC(2026, 9, 2, 12, 0, 0);
+  assert.deepEqual(evaluateImageGenerationQuota({
+    requestsInWindow: 2,
+    imagesToday: 49,
+    oldestRequestAt: now - 60_000,
+    now,
+  }), { allowed: true });
+  assert.deepEqual(evaluateImageGenerationQuota({
+    requestsInWindow: 3,
+    imagesToday: 3,
+    oldestRequestAt: now - 60_000,
+    now,
+  }), { allowed: false, reason: "window", retryAt: now - 60_000 + 15 * 60 * 1000 + 1 });
+  assert.deepEqual(evaluateImageGenerationQuota({
+    requestsInWindow: 0,
+    imagesToday: 50,
+    oldestRequestAt: null,
+    now,
+  }), { allowed: false, reason: "daily", retryAt: Date.UTC(2026, 9, 3) });
 });
 
 test("classifies provider failures", () => {

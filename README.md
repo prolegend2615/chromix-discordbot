@@ -38,3 +38,9 @@ Edit [`system-instructions.txt`](system-instructions.txt) to control how the AI 
 ## Flux TTS voice replies
 
 Set OPENROUTER_API_KEY to enable Deepgram Flux TTS voice replies through OpenRouter. Set OPENROUTER_TTS_VOICE to choose a supported Flux voice; the default is flux-alexis-en. Voice requests in the same channel are reserved and processed in FIFO order. The bot displays “Generating voice…” while waiting, tries Flux first, and automatically falls back to the local SAM WAV voice if Flux or delivery fails.
+
+## AI image generation
+
+Ask the AI to create an image in a server chat, for example `c.chat create an image of a watercolor fox under a starry sky`. The AI turns the request into a visual prompt and generates one image through Pollinations. Image generation is disabled in direct messages.
+
+Set `POLLINATIONS_API_KEY` in the bot's environment using a secret from [Pollinations](https://enter.pollinations.ai/keys). Do not commit the key. Each Discord server shares a limit of 3 image-generation requests in any rolling 15-minute window and 50 images per UTC day. Requests are recorded in the existing SQLite database so limits persist across restarts. Failed provider calls still count toward the 15-minute request limit; only successful generations count toward the daily image cap.

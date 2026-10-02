@@ -14,4 +14,5 @@ export const config = {
   groqApiKey: process.env.GROQ_API_KEY,
   openrouterApiKey: process.env.OPENROUTER_API_KEY,
   openrouterTtsVoice: process.env.OPENROUTER_TTS_VOICE ?? "flux-alexis-en",
+  pollinationsApiKey: process.env.POLLINATIONS_API_KEY,
 };
