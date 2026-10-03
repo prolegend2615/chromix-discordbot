@@ -13,6 +13,7 @@ import { clearAfkStatus, formatAfkDuration, formatAfkMention, getAfkStatus, type
 import { extractMentionId, formatReminderDuration, isTransientNetworkError, MODELS, userFacingProviderError } from "./logic.js";
 import { deleteReminder, getDueReminders } from "./services/reminders.js";
 import { handleRockPaperScissorsButton, startRockPaperScissorsGame } from "./services/rock-paper-scissors.js";
+import { handleTicTacToeButton, startTicTacToeGame } from "./services/tic-tac-toe.js";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
 const prefix = "c.";
@@ -304,7 +305,7 @@ function helpEmbed() {
       { name: "History", value: "`/clear` removes history in this channel. Thread chats get their own persistent conversation history. `/reset` also resets your settings. `/delete-my-data` removes stored data but keeps VIP." },
       { name: "Limits", value: "8 prompts per minute, with a 5-second cooldown. VIP users receive 12 history messages; others receive 5." },
       { name: "Image generation", value: "Ask me to create an image in a server chat. Each server can generate 3 images every 15 minutes and 50 per UTC day. Image generation is unavailable in DMs." },
-      { name: "Games", value: "Ask me to play Rock, Paper, Scissors, e.g. `let's play rock paper scissors`. Use the buttons to play rounds, then press **End Game**." },
+      { name: "Games", value: "Ask me to play Rock, Paper, Scissors or Tic-Tac-Toe. In Tic-Tac-Toe, you are X and Chromix is O; choose a square to make a move." },
       { name: "Server admins", value: "`/listen` and `/ignore` control which channels allow the bot." },
     );
 }
@@ -393,6 +394,7 @@ async function sendChatFromMessage(message: Message, prompt: string, referenceId
       });
     },
     onRockPaperScissors: placeholder => startRockPaperScissorsGame(placeholder, message.author.id),
+    onTicTacToe: placeholder => startTicTacToeGame(placeholder, message.author.id),
     onWelcomeBack: status => message.reply({
       embeds: [welcomeBackEmbed(message.author.globalName ?? message.author.username, status)],
       allowedMentions: { parse: [], repliedUser: false },
@@ -595,6 +597,7 @@ client.on(Events.InteractionCreate, async interaction => {
             });
           },
           onRockPaperScissors: placeholder => startRockPaperScissorsGame(placeholder, interaction.user.id),
+          onTicTacToe: placeholder => startTicTacToeGame(placeholder, interaction.user.id),
           onWelcomeBack: async status => {
             await interaction.followUp({
               embeds: [welcomeBackEmbed(interaction.user.globalName ?? interaction.user.username, status)],
@@ -606,12 +609,13 @@ client.on(Events.InteractionCreate, async interaction => {
     }
     if (interaction.isStringSelectMenu()) await handleSettingSelect(interaction);
     if (interaction.isButton()) {
-      if (interaction.customId.startsWith("rps:")) {
+      if (interaction.customId.startsWith("rps:") || interaction.customId.startsWith("ttt:")) {
         if (await isUserBlacklisted(interaction.user.id)) {
           await interaction.reply({ content: "You are blacklisted and cannot use bot commands.", ephemeral: true });
           return;
         }
-        await handleRockPaperScissorsButton(interaction);
+        if (interaction.customId.startsWith("rps:")) await handleRockPaperScissorsButton(interaction);
+        else await handleTicTacToeButton(interaction);
         return;
       }
       await handleSettingsContinue(interaction);

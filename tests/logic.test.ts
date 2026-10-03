@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { classifyProviderError, evaluateImageGenerationQuota, extractMentionId, formatReminderDuration, getRockPaperScissorsWinner, hasAvatarIntent, hasImageGenerationIntent, hasReminderIntent, hasRockPaperScissorsIntent, hasTimeWord, isModelAvailable, isTransientNetworkError, parseGenerateImageCommand, parsePrefixCommand, parseReminderDuration, parseRockPaperScissorsCommand, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand, userFacingProviderError } from "../src/logic.js";
+import { classifyProviderError, evaluateImageGenerationQuota, extractMentionId, formatReminderDuration, getRockPaperScissorsWinner, getTicTacToeBotMoves, getTicTacToeWinner, hasAvatarIntent, hasImageGenerationIntent, hasReminderIntent, hasRockPaperScissorsIntent, hasTicTacToeIntent, hasTimeWord, isModelAvailable, isTransientNetworkError, parseGenerateImageCommand, parsePrefixCommand, parseReminderDuration, parseRockPaperScissorsCommand, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand, parseTicTacToeCommand, userFacingProviderError } from "../src/logic.js";
 
 test("parses prefix commands and arguments case-insensitively", () => {
   assert.deepEqual(parsePrefixCommand("  C.CHAT hello world"), { name: "chat", args: ["hello", "world"] });
@@ -156,4 +156,31 @@ test("resolves all Rock, Paper, Scissors round outcomes", () => {
   assert.equal(getRockPaperScissorsWinner("rock", "paper"), "bot");
   assert.equal(getRockPaperScissorsWinner("paper", "scissors"), "bot");
   assert.equal(getRockPaperScissorsWinner("rock", "rock"), "tie");
+});
+
+test("detects Tic-Tac-Toe game requests without mistaking rules questions for requests", () => {
+  assert.equal(hasTicTacToeIntent("Can we play tic tac toe?"), true);
+  assert.equal(hasTicTacToeIntent("Start tic-tac-toe"), true);
+  assert.equal(hasTicTacToeIntent("Let's play TTT"), true);
+  assert.equal(hasTicTacToeIntent("How do you play tic tac toe?"), false);
+  assert.equal(hasTicTacToeIntent("What are the rules of noughts and crosses?"), false);
+});
+
+test("parses only the exact Tic-Tac-Toe game action", () => {
+  assert.deepEqual(parseTicTacToeCommand("use tic_tac_toe"), { action: "start" });
+  assert.deepEqual(parseTicTacToeCommand(" USE TIC_TAC_TOE "), { action: "start" });
+  assert.equal(parseTicTacToeCommand("use tic_tac_toe then say hello"), null);
+});
+
+test("detects Tic-Tac-Toe wins and ties", () => {
+  assert.equal(getTicTacToeWinner(["X", "X", "X", "O", "O", null, null, null, null]), "X");
+  assert.equal(getTicTacToeWinner(["X", "X", "O", "X", "O", null, "O", null, null]), "O");
+  assert.equal(getTicTacToeWinner(["X", "O", "X", "X", "O", "O", "O", "X", "X"]), "tie");
+  assert.equal(getTicTacToeWinner(["X", null, "O", null, "X", null, null, "O", null]), null);
+});
+
+test("Chromix takes a win, blocks an immediate player win, and prefers center", () => {
+  assert.deepEqual(getTicTacToeBotMoves(["O", "O", null, "X", "X", null, null, null, null]), [2]);
+  assert.deepEqual(getTicTacToeBotMoves(["X", "X", null, "O", null, null, null, null, null]), [2]);
+  assert.deepEqual(getTicTacToeBotMoves(["X", null, null, null, null, null, null, null, null]), [4]);
 });

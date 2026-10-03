@@ -222,3 +222,56 @@ export function getRockPaperScissorsWinner(
   ) return "player";
   return "bot";
 }
+
+// --- Tic-Tac-Toe Action ---
+
+export type TicTacToeMark = "X" | "O";
+export type TicTacToeBoard = Array<TicTacToeMark | null>;
+export type TicTacToeOutcome = TicTacToeMark | "tie" | null;
+
+/** Detect game-start requests without treating rules questions as requests to play. */
+export function hasTicTacToeIntent(text: string): boolean {
+  if (/^\s*(?:how|what|when|where|why)\b/i.test(text)) return false;
+  return /\b(?:play|start|challenge)\b[\s\S]{0,60}\b(?:tic[\s-]*tac[\s-]*toe|noughts?\s+and\s+crosses|ttt)\b/i.test(text);
+}
+
+/** Parses the AI action used to open a button-based game. */
+export function parseTicTacToeCommand(text: string): { action: "start" } | null {
+  return /^\s*use\s+tic_tac_toe\s*$/i.test(text) ? { action: "start" } : null;
+}
+
+const TIC_TAC_TOE_LINES: readonly (readonly [number, number, number])[] = [
+  [0, 1, 2], [3, 4, 5], [6, 7, 8],
+  [0, 3, 6], [1, 4, 7], [2, 5, 8],
+  [0, 4, 8], [2, 4, 6],
+];
+
+export function getTicTacToeWinner(board: TicTacToeBoard): TicTacToeOutcome {
+  for (const [first, second, third] of TIC_TAC_TOE_LINES) {
+    const mark = board[first];
+    if (mark && mark === board[second] && mark === board[third]) return mark;
+  }
+  return board.length === 9 && board.every(cell => cell !== null) ? "tie" : null;
+}
+
+/** Prefer a winning move, then block X, then choose center/corners before edges. */
+export function getTicTacToeBotMoves(board: TicTacToeBoard): number[] {
+  const available = board.flatMap((cell, index) => cell === null ? [index] : []);
+  const movesThatWin = available.filter(index => {
+    const next = [...board];
+    next[index] = "O";
+    return getTicTacToeWinner(next) === "O";
+  });
+  if (movesThatWin.length) return movesThatWin;
+
+  const movesThatBlock = available.filter(index => {
+    const next = [...board];
+    next[index] = "X";
+    return getTicTacToeWinner(next) === "X";
+  });
+  if (movesThatBlock.length) return movesThatBlock;
+  if (available.includes(4)) return [4];
+
+  const corners = available.filter(index => [0, 2, 6, 8].includes(index));
+  return corners.length ? corners : available;
+}

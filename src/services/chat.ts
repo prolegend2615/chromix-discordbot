@@ -5,7 +5,7 @@ import { checkPromptLimit, isChannelAllowed } from "./access.js";
 import { streamAnswer } from "./ai.js";
 import { recordResponseMetric, resolveThreadConversationKey } from "./metrics.js";
 import { clearAfkStatus, getAfkStatus, normalizeAfkReason, setAfkStatus, type AfkStatus } from "./afk.js";
-import { formatReminderDuration, hasImageGenerationIntent, hasReminderIntent, hasRockPaperScissorsIntent, hasTtsIntent, parseGenerateImageCommand, parseReminderDuration, parseRockPaperScissorsCommand, parseSamSpeakCommand, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand } from "../logic.js";
+import { formatReminderDuration, hasImageGenerationIntent, hasReminderIntent, hasRockPaperScissorsIntent, hasTicTacToeIntent, hasTtsIntent, parseGenerateImageCommand, parseReminderDuration, parseRockPaperScissorsCommand, parseSamSpeakCommand, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand, parseTicTacToeCommand } from "../logic.js";
 import { createReminder } from "./reminders.js";
 import { reserveVoiceMessage, type VoiceReservation } from "./tts.js";
 import { generateGuildImage } from "./image-generation.js";
@@ -54,6 +54,7 @@ export async function runChat(args: {
   onReminderSet?: (seconds: number, message: string, placeholder: Message) => Promise<void>;
   onAvatar?: (target: string, placeholder: Message) => Promise<void>;
   onRockPaperScissors?: (placeholder: Message) => Promise<void>;
+  onTicTacToe?: (placeholder: Message) => Promise<void>;
   onWelcomeBack?: (status: AfkStatus) => Promise<void>;
 }) {
   const prompt = args.prompt.trim();
@@ -104,6 +105,7 @@ export async function runChat(args: {
       ttsActionEnabled: hasTtsIntent(prompt),
       imageGenerationActionEnabled: hasImageGenerationIntent(prompt),
       rockPaperScissorsActionEnabled: hasRockPaperScissorsIntent(prompt),
+      ticTacToeActionEnabled: hasTicTacToeIntent(prompt),
       onDelta: text => { answer += text; },
     });
     const afkCommand = parseSetAfkCommand(answer);
@@ -114,6 +116,9 @@ export async function runChat(args: {
     const imageCommand = parseGenerateImageCommand(answer);
     const rockPaperScissorsCommand = hasRockPaperScissorsIntent(prompt)
       ? parseRockPaperScissorsCommand(answer)
+      : null;
+    const ticTacToeCommand = hasTicTacToeIntent(prompt)
+      ? parseTicTacToeCommand(answer)
       : null;
     let actionResponseHandled = false;
     if (afkCommand) {
@@ -188,6 +193,13 @@ export async function runChat(args: {
       answer = "Started a game of Rock, Paper, Scissors.";
       if (args.onRockPaperScissors) {
         await args.onRockPaperScissors(placeholder);
+        actionResponseHandled = true;
+      }
+    }
+    if (ticTacToeCommand) {
+      answer = "Started a game of Tic-Tac-Toe.";
+      if (args.onTicTacToe) {
+        await args.onTicTacToe(placeholder);
         actionResponseHandled = true;
       }
     }

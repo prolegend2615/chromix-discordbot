@@ -35,6 +35,7 @@ Edit [`system-instructions.txt`](system-instructions.txt) to control how the AI 
 - **Reminder** — ask the bot to remind you later, e.g. `remind me in 15 minutes to check the oven`.
 - **Avatar** — ask the bot to show an avatar or profile picture, e.g. `show me my avatar` or `show the avatar of @user`. To see someone else's avatar, **mention (ping) them** in the message; if you ask for another member's avatar without pinging anyone, the bot will ask you to ping them.
 - **Rock, Paper, Scissors** — ask the bot to play, e.g. `@Chromix let's play rock paper scissors`. Choose a button to play a round; the score stays visible until you press **End Game**. Only the person who started the game can make moves.
+- **Tic-Tac-Toe** — ask the bot to play, e.g. `@Chromix let's play tic tac toe`. You play X and Chromix plays O on a 3×3 button board. Only the person who started the game can make moves.
 
 ## Flux TTS voice replies
 
