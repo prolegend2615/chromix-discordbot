@@ -117,9 +117,9 @@ export async function runChat(args: {
     const rockPaperScissorsCommand = hasRockPaperScissorsIntent(prompt)
       ? parseRockPaperScissorsCommand(answer)
       : null;
-    const ticTacToeCommand = hasTicTacToeIntent(prompt)
-      ? parseTicTacToeCommand(answer)
-      : null;
+    // The exact AI action is the execution trigger; don't gate it on the user's
+    // phrasing a second time or a valid action can be shown as plain text.
+    const ticTacToeCommand = parseTicTacToeCommand(answer);
     let actionResponseHandled = false;
     if (afkCommand) {
       const reason = normalizeAfkReason(afkCommand.reason);
