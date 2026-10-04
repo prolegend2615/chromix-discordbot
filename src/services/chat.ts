@@ -1,4 +1,4 @@
-import type { Message, User, GuildMember, TextBasedChannel } from "discord.js";
+import { PermissionsBitField, type Message, type User, type GuildMember, type TextBasedChannel } from "discord.js";
 import { getSettings } from "./settings.js";
 import { addHistory, getHistory } from "./history.js";
 import { checkPromptLimit, isChannelAllowed } from "./access.js";
@@ -66,6 +66,7 @@ function getThreadChannelId(channel: TextBasedChannel): string | undefined {
 
 export async function runChat(args: {
   prompt: string;
+  adminChat?: boolean;
   user: User;
   member: GuildMember | null;
   guildId?: string;
@@ -86,6 +87,9 @@ export async function runChat(args: {
 }) {
   const prompt = args.prompt.trim();
   if (!prompt) throw new Error("Please include a message for me to answer.");
+  if (args.adminChat && (!args.guildId || !args.member?.permissions.has(PermissionsBitField.Flags.Administrator))) {
+    throw new Error("Only server administrators can use admin chat.");
+  }
   if (hasImageGenerationIntent(prompt) && !args.guildId) {
     throw new Error("Image generation is only available in a Discord server, not in direct messages.");
   }
@@ -110,7 +114,7 @@ export async function runChat(args: {
     const placeholder = await args.reply("Thinking…");
     const editResponse = args.edit ?? (content => placeholder.edit(content));
 
-    if (hasTtsIntent(prompt)) {
+    if (!args.adminChat && hasTtsIntent(prompt)) {
       voiceReservation = reserveVoiceMessage({ channel: args.channel, channelId: args.channelId });
       await editResponse("Generating voice…").catch(() => undefined);
     }
@@ -118,7 +122,9 @@ export async function runChat(args: {
     if (existingAfk) await args.onWelcomeBack?.(existingAfk);
 
     const settings = await getSettings(args.user.id, args.guildId);
-    const history = await getHistory(args.user.id, args.guildId, conversationChannelId, settings.vip ? 12 : 5);
+    const history = args.adminChat
+      ? []
+      : await getHistory(args.user.id, args.guildId, conversationChannelId, settings.vip ? 12 : 5);
 
     const userName = args.user.globalName ?? args.user.username;
     const serverNickname = args.member?.nickname ?? "None";
@@ -133,24 +139,25 @@ export async function runChat(args: {
       settings,
       history,
       messageTimestamp: args.messageTimestamp ?? Date.now(),
-      reminderActionEnabled: hasReminderIntent(prompt),
-      ttsActionEnabled: hasTtsIntent(prompt),
-      imageGenerationActionEnabled: hasImageGenerationIntent(prompt),
-      rockPaperScissorsActionEnabled: hasRockPaperScissorsIntent(prompt),
-      ticTacToeActionEnabled: hasTicTacToeIntent(prompt),
+      adminChatActionEnabled: args.adminChat,
+      reminderActionEnabled: !args.adminChat && hasReminderIntent(prompt),
+      ttsActionEnabled: !args.adminChat && hasTtsIntent(prompt),
+      imageGenerationActionEnabled: !args.adminChat && hasImageGenerationIntent(prompt),
+      rockPaperScissorsActionEnabled: !args.adminChat && hasRockPaperScissorsIntent(prompt),
+      ticTacToeActionEnabled: !args.adminChat && hasTicTacToeIntent(prompt),
       onDelta: text => { answer += text; },
     });
 
-    const afkCommand = parseSetAfkCommand(answer);
-    const reminderCommand = parseSetReminderCommand(answer);
-    const avatarCommand = parseShowAvatarCommand(answer);
-    const imageCommand = parseGenerateImageCommand(answer);
-    const rockPaperScissorsCommand = hasRockPaperScissorsIntent(prompt)
+    const afkCommand = args.adminChat ? null : parseSetAfkCommand(answer);
+    const reminderCommand = args.adminChat ? null : parseSetReminderCommand(answer);
+    const avatarCommand = args.adminChat ? null : parseShowAvatarCommand(answer);
+    const imageCommand = args.adminChat ? null : parseGenerateImageCommand(answer);
+    const rockPaperScissorsCommand = !args.adminChat && hasRockPaperScissorsIntent(prompt)
       ? parseRockPaperScissorsCommand(answer)
       : null;
-    const ticTacToeCommand = parseTicTacToeCommand(answer);
+    const ticTacToeCommand = args.adminChat ? null : parseTicTacToeCommand(answer);
 
-    const channelManagementCommand = parseChannelManagementCommand(answer);
+    const channelManagementCommand = args.adminChat ? parseChannelManagementCommand(answer) : null;
 
     let actionResponseHandled = false;
 
@@ -197,7 +204,7 @@ export async function runChat(args: {
       }
     }
 
-    const samSpeakCommand = parseSamSpeakCommand(answer);
+    const samSpeakCommand = args.adminChat ? null : parseSamSpeakCommand(answer);
     if (samSpeakCommand) {
       const reservation = voiceReservation ?? reserveVoiceMessage({ channel: args.channel, channelId: args.channelId });
       if (!voiceReservation) await editResponse("Generating voice…").catch(() => undefined);
@@ -272,8 +279,10 @@ export async function runChat(args: {
 
     const responseTimeMs = Date.now() - startedAt;
     await recordResponseMetric(args.user.id, args.guildId, conversationChannelId, responseTimeMs);
-    await addHistory(args.user.id, args.guildId, conversationChannelId, { role: "user", content: prompt }, args.sourceMessageId, args.referencedMessageId);
-    await addHistory(args.user.id, args.guildId, conversationChannelId, { role: "assistant", content: answer }, placeholder.id);
+    if (!args.adminChat) {
+      await addHistory(args.user.id, args.guildId, conversationChannelId, { role: "user", content: prompt }, args.sourceMessageId, args.referencedMessageId);
+      await addHistory(args.user.id, args.guildId, conversationChannelId, { role: "assistant", content: answer }, placeholder.id);
+    }
   } finally {
     voiceReservation?.cancel();
     activePrompts.delete(key);

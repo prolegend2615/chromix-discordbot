@@ -14,7 +14,6 @@ import { extractMentionId, formatReminderDuration, isTransientNetworkError, MODE
 import { deleteReminder, getDueReminders } from "./services/reminders.js";
 import { handleRockPaperScissorsButton, startRockPaperScissorsGame } from "./services/rock-paper-scissors.js";
 import { handleTicTacToeButton, startTicTacToeGame } from "./services/tic-tac-toe.js";
-import { getAdminChatSystemPrompt } from "./services/channel-management.js";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
 const prefix = "c.";
@@ -372,9 +371,9 @@ async function resolveAvatarUser(target: string, requester: User): Promise<User>
   return requester;
 }
 
-async function sendChatFromMessage(message: Message, prompt: string, referenceId?: string) {
+async function sendChatFromMessage(message: Message, prompt: string, referenceId?: string, adminChat = false) {
   await runChat({
-    prompt, user: message.author, member: message.member, guildId: message.guildId ?? undefined,
+    prompt, adminChat, user: message.author, member: message.member, guildId: message.guildId ?? undefined,
     guildName: message.guild?.name, channel: message.channel, channelId: message.channelId,
     messageTimestamp: message.createdTimestamp,
     sourceMessageId: message.id, referencedMessageId: referenceId,
@@ -448,8 +447,7 @@ client.on(Events.MessageCreate, async message => {
     });
     return;
   }
-  const adminPrompt = `${getAdminChatSystemPrompt()}\n\nAdmin request: ${request}`;
-  await sendChatFromMessage(message, adminPrompt, message.reference?.messageId);
+  await sendChatFromMessage(message, request, message.reference?.messageId, true);
   return;
 }
     if (command.startsWith(`${prefix}chat`)) return await sendChatFromMessage(message, content.slice(`${prefix}chat`.length));
