@@ -20,7 +20,7 @@ export function hasTimeWord(text: string) {
 }
 
 export function hasReminderIntent(text: string) {
-  return /\b(?:remind(?:er|ing)?|remember|forget|notify|notification|alert|ping|tell|say|schedule|nudge|warn)\b|wake\s+me|let\s+me\s+know|message\s+me|don't\s+let\s+me\s+forget|do\s+not\s+let\s+me\s+forget|when\s+(?:it's|it is)\s+time/i.test(text);
+  return /\b(?:remind(?:er|ing)?|remember|forget|notify|notification|alert|ping|tell|say|schedule|nudge|warn)\b|wake\s+me|let\s+me\s+know|message\s+me|don't\s+let\s+me\s+forget|do\s+not\s+let\s+me[...]
 }
 
 export function isTransientNetworkError(error: unknown) {
@@ -152,7 +152,7 @@ export const IMAGE_GENERATIONS_PER_UTC_DAY = 50;
 
 /** Detect requests to create a new image, not requests to view an existing avatar. */
 export function hasImageGenerationIntent(text: string): boolean {
-  const explicitImageRequest = /\b(?:generate|create|make|draw|paint|illustrate|render|design)\b[\s\S]{0,80}\b(?:images?|pictures?|illustrations?|artworks?|art|photos?|wallpapers?|logos?|posters?|memes?|icons?|avatars?|portraits?|scenes?|landscapes?|profile\s*(?:pictures?|photos?|images?|pics?))\b/i;
+  const explicitImageRequest = /\b(?:generate|create|make|draw|paint|illustrate|render|design)\b[\s\S]{0,80}\b(?:images?|pictures?|illustrations?|artworks?|art|photos?|wallpapers?|logos?|posters?[...]
   const drawingRequest = /\b(?:draw|paint|illustrate)\b/i;
   return explicitImageRequest.test(text) || drawingRequest.test(text);
 }
@@ -274,4 +274,61 @@ export function getTicTacToeBotMoves(board: TicTacToeBoard): number[] {
 
   const corners = available.filter(index => [0, 2, 6, 8].includes(index));
   return corners.length ? corners : available;
+}
+
+// --- Channel Management Action ---
+
+export type ChannelManagementCommand =
+  | { action: "create_channel"; name: string; categoryId?: string }
+  | { action: "create_category"; name: string }
+  | { action: "delete_channel"; channelId: string }
+  | { action: "delete_category"; categoryId: string };
+
+export function hasChannelManagementIntent(text: string): boolean {
+  return /\b(?:create|make|new|delete|remove)\b[\s\S]{0,100}\b(?:channel|category)\b/i.test(text);
+}
+
+/**
+ * Parses AI channel management commands:
+ *  - `use create_channel (name)`
+ *  - `use create_channel (name) (categoryId)`
+ *  - `use create_category (name)`
+ *  - `use delete_channel (channelId)`
+ *  - `use delete_category (categoryId)`
+ */
+export function parseChannelManagementCommand(text: string): ChannelManagementCommand | null {
+  // Create channel: use create_channel (name) or use create_channel (name) (categoryId)
+  let match = /^\s*use\s+create_channel\s*\(([\s\S]*?)\)\s*(?:\(([\s\S]*?)\))?\s*$/i.exec(text);
+  if (match) {
+    const name = match[1]?.trim();
+    const categoryId = match[2]?.trim();
+    if (!name) return null;
+    return { action: "create_channel", name, categoryId: categoryId || undefined };
+  }
+
+  // Create category: use create_category (name)
+  match = /^\s*use\s+create_category\s*\(([\s\S]*?)\)\s*$/i.exec(text);
+  if (match) {
+    const name = match[1]?.trim();
+    if (!name) return null;
+    return { action: "create_category", name };
+  }
+
+  // Delete channel: use delete_channel (channelId)
+  match = /^\s*use\s+delete_channel\s*\(([\s\S]*?)\)\s*$/i.exec(text);
+  if (match) {
+    const channelId = match[1]?.trim();
+    if (!channelId) return null;
+    return { action: "delete_channel", channelId };
+  }
+
+  // Delete category: use delete_category (categoryId)
+  match = /^\s*use\s+delete_category\s*\(([\s\S]*?)\)\s*$/i.exec(text);
+  if (match) {
+    const categoryId = match[1]?.trim();
+    if (!categoryId) return null;
+    return { action: "delete_category", categoryId };
+  }
+
+  return null;
 }
