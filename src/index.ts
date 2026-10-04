@@ -425,6 +425,33 @@ client.on(Events.MessageCreate, async message => {
         allowedMentions: { parse: [], repliedUser: false },
       });
     }
+    if (command.startsWith(`${prefix}adminchat`)) {
+  if (!isAdmin(message.member)) {
+    await message.reply({
+      content: "Only server administrators can use admin chat.",
+      allowedMentions: { repliedUser: false },
+    });
+    return;
+  }
+  const request = content.slice(`${prefix}adminchat`.length).trim();
+  if (!message.guild) {
+    await message.reply({
+      content: "Admin chat only works in a Discord server.",
+      allowedMentions: { repliedUser: false },
+    });
+    return;
+  }
+  if (!request) {
+    await message.reply({
+      content: "Usage: `c.adminchat <request>`",
+      allowedMentions: { repliedUser: false },
+    });
+    return;
+  }
+  const adminPrompt = `${getAdminChatSystemPrompt()}\n\nAdmin request: ${request}`;
+  await sendChatFromMessage(message, adminPrompt, message.reference?.messageId);
+  return;
+}
     if (command.startsWith(`${prefix}chat`)) return await sendChatFromMessage(message, content.slice(`${prefix}chat`.length));
     if (command === `${prefix}clear`) {
       await handleClearCommand(messageCommandContext(message), false);
