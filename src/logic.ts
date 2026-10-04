@@ -20,7 +20,7 @@ export function hasTimeWord(text: string) {
 }
 
 export function hasReminderIntent(text: string) {
-  return /\b(?:remind(?:er|ing)?|remember|forget|notify|notification|alert|ping|tell|say|schedule|nudge|warn)\b|wake\s+me|let\s+me\s+know|message\s+me|don't\s+let\s+me\s+forget|do\s+not\s+let\s+me[...]
+  return /\b(?:remind(?:er|ing)?|remember|forget|notify|notification|alert|ping|tell|say|schedule|nudge|warn)\b|wake\s+me|let\s+me\s+know|message\s+me|don't\s+let\s+me\s+forget|do\s+not\s+let\s+me/i.test(text);
 }
 
 export function isTransientNetworkError(error: unknown) {
@@ -152,9 +152,9 @@ export const IMAGE_GENERATIONS_PER_UTC_DAY = 50;
 
 /** Detect requests to create a new image, not requests to view an existing avatar. */
 export function hasImageGenerationIntent(text: string): boolean {
-  const explicitImageRequest = /\b(?:generate|create|make|draw|paint|illustrate|render|design)\b[\s\S]{0,80}\b(?:images?|pictures?|illustrations?|artworks?|art|photos?|wallpapers?|logos?|posters?[...]
+  const explicitImageRequest = /\b(?:generate|create|make|draw|paint|illustrate|render|design)\b[\s\S]{0,80}\b(?:images?|pictures?|illustrations?|artworks?|art|photos?|wallpapers?|logos?|posters?|graphics?)\b/i.test(text);
   const drawingRequest = /\b(?:draw|paint|illustrate)\b/i;
-  return explicitImageRequest.test(text) || drawingRequest.test(text);
+  return explicitImageRequest || drawingRequest.test(text);
 }
 
 /** Parses the AI action format used to request one generated image. */
@@ -317,7 +317,7 @@ export function parseChannelManagementCommand(text: string): ChannelManagementCo
   // Delete channel: use delete_channel (channelId)
   match = /^\s*use\s+delete_channel\s*\(([\s\S]*?)\)\s*$/i.exec(text);
   if (match) {
-    const channelId = match[1]?.trim();
+    const channelId = match[1].trim();
     if (!channelId) return null;
     return { action: "delete_channel", channelId };
   }
@@ -325,7 +325,7 @@ export function parseChannelManagementCommand(text: string): ChannelManagementCo
   // Delete category: use delete_category (categoryId)
   match = /^\s*use\s+delete_category\s*\(([\s\S]*?)\)\s*$/i.exec(text);
   if (match) {
-    const categoryId = match[1]?.trim();
+    const categoryId = match[1].trim();
     if (!categoryId) return null;
     return { action: "delete_category", categoryId };
   }
