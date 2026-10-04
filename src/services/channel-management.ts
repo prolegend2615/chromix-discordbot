@@ -21,7 +21,10 @@ export function sanitizeDiscordName(input: string): string {
 
 export async function getServerStructure(guild: Guild): Promise<string> {
   try {
-    const channels = await guild.channels.fetch();
+    const fetchedChannels = await guild.channels.fetch();
+    const channels = fetchedChannels.filter(
+      (ch): ch is NonNullable<typeof ch> => ch !== null,
+    );
 
     const categories = channels.filter(ch => ch.type === ChannelType.GuildCategory);
     const uncategorizedTextChannels = channels.filter(ch => ch.type === ChannelType.GuildText && !ch.parentId);
