@@ -14,6 +14,7 @@ import { extractMentionId, formatReminderDuration, isTransientNetworkError, MODE
 import { deleteReminder, getDueReminders } from "./services/reminders.js";
 import { handleRockPaperScissorsButton, startRockPaperScissorsGame } from "./services/rock-paper-scissors.js";
 import { handleTicTacToeButton, startTicTacToeGame } from "./services/tic-tac-toe.js";
+import { getAdminChatSystemPrompt } from "./services/channel-management.js";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
 const prefix = "c.";
