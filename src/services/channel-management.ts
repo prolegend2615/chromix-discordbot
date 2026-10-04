@@ -1,11 +1,11 @@
-import type { Guild, TextChannel, CategoryChannel } from "discord.js";
 import { ChannelType, type Guild } from "discord.js";
 
 export type ChannelManagementCommand =
   | { action: "create_channel"; name: string; categoryId?: string }
   | { action: "create_category"; name: string }
   | { action: "delete_channel"; channelId: string }
-  | { action: "delete_category"; categoryId: string };
+  | { action: "delete_category"; categoryId: string }
+  | { action: "view_channels" };
 
 export function sanitizeDiscordName(input: string): string {
   const cleaned = input
@@ -19,10 +19,64 @@ export function sanitizeDiscordName(input: string): string {
   return cleaned.slice(0, 100);
 }
 
+export async function getServerStructure(guild: Guild): Promise<string> {
+  try {
+    const channels = await guild.channels.fetch();
+
+    const categories = channels.filter(ch => ch.type === ChannelType.GuildCategory);
+    const uncategorizedTextChannels = channels.filter(ch => ch.type === ChannelType.GuildText && !ch.parentId);
+    const uncategorizedVoiceChannels = channels.filter(ch => ch.type === ChannelType.GuildVoice && !ch.parentId);
+
+    let structure = `**Server Structure for ${guild.name}**\n\n`;
+
+    if (categories.size > 0) {
+      structure += "**Categories:**\n";
+      for (const [, category] of categories) {
+        structure += `\n📁 ${category.name} (ID: ${category.id})\n`;
+
+        const channelsInCategory = channels.filter(
+          ch => ch.parentId === category.id && (ch.type === ChannelType.GuildText || ch.type === ChannelType.GuildVoice)
+        );
+
+        if (channelsInCategory.size > 0) {
+          for (const [, channel] of channelsInCategory) {
+            const icon = channel.type === ChannelType.GuildText ? "#" : "🎙️";
+            structure += `  ${icon} ${channel.name} (ID: ${channel.id})\n`;
+          }
+        } else {
+          structure += "  (empty)\n";
+        }
+      }
+    }
+
+    if (uncategorizedTextChannels.size > 0) {
+      structure += "\n**Text Channels (No Category):**\n";
+      for (const [, channel] of uncategorizedTextChannels) {
+        structure += `# ${channel.name} (ID: ${channel.id})\n`;
+      }
+    }
+
+    if (uncategorizedVoiceChannels.size > 0) {
+      structure += "\n**Voice Channels (No Category):**\n";
+      for (const [, channel] of uncategorizedVoiceChannels) {
+        structure += `🎙️ ${channel.name} (ID: ${channel.id})\n`;
+      }
+    }
+
+    if (categories.size === 0 && uncategorizedTextChannels.size === 0 && uncategorizedVoiceChannels.size === 0) {
+      structure += "No channels or categories found.";
+    }
+
+    return structure;
+  } catch (error) {
+    return `Error fetching server structure: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
 export function getAdminChatSystemPrompt(): string {
   return [
     "You are the server admin Discord assistant.",
-    "You may ONLY create channels, create categories, delete channels, or delete categories.",
+    "You may ONLY create channels, create categories, delete channels, delete categories, or view server structure.",
     "You may NOT answer normal chat questions in this mode.",
     "You may NOT do anything else except these admin actions.",
     "",
@@ -32,6 +86,7 @@ export function getAdminChatSystemPrompt(): string {
     "`use create_category (category-name)`",
     "`use delete_channel (channel-id)`",
     "`use delete_category (category-id)`",
+    "`use view_channels`",
     "",
     "Examples:",
     "`use create_channel (announcements)`",
@@ -39,18 +94,20 @@ export function getAdminChatSystemPrompt(): string {
     "`use create_channel (general) (123456789012345678)`",
     "`use delete_channel (123456789012345678)`",
     "`use delete_category (123456789012345678)`",
+    "`use view_channels`",
     "",
     "Rules:",
     "- Only use the tool syntax above.",
     "- Do not write a normal conversational reply.",
     "- Do not explain the tool.",
-    "- If the request is not clearly about creating or deleting a channel or category, refuse politely with one sentence.",
+    "- If the request is not clearly about creating, deleting, or viewing channels/categories, refuse politely with one sentence.",
     "- Keep channel names lowercase, simple, and hyphenated.",
+    "- When listing or showing channels to the user, use the `use view_channels` command first to gather the server structure.",
   ].join("\n");
 }
 
 export function hasChannelManagementIntent(text: string): boolean {
-  return /\b(?:create|make|new|delete|remove|add)\b[\s\S]{0,120}\b(?:channel|category)\b/i.test(text);
+  return /\b(?:create|make|new|delete|remove|add|view|show|list)\b[\s\S]{0,120}\b(?:channel|category)\b/i.test(text);
 }
 
 export function parseChannelManagementCommand(text: string): ChannelManagementCommand | null {
@@ -81,6 +138,10 @@ export function parseChannelManagementCommand(text: string): ChannelManagementCo
     const categoryId = deleteCategoryMatch[1].trim();
     if (!categoryId) return null;
     return { action: "delete_category", categoryId };
+  }
+
+  if (/^\s*use\s+view_channels\s*$/i.test(text)) {
+    return { action: "view_channels" };
   }
 
   return null;
@@ -163,6 +224,10 @@ export async function executeChannelManagementCommand(
         const categoryName = "name" in category ? category.name : "unknown";
         await category.delete();
         return { success: true, message: `✅ Deleted category ${categoryName}` };
+      }
+
+      case "view_channels": {
+        return { success: true, message: await getServerStructure(guild) };
       }
 
       default:
