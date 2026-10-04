@@ -5,10 +5,29 @@ import { checkPromptLimit, isChannelAllowed } from "./access.js";
 import { streamAnswer } from "./ai.js";
 import { recordResponseMetric, resolveThreadConversationKey } from "./metrics.js";
 import { clearAfkStatus, getAfkStatus, normalizeAfkReason, setAfkStatus, type AfkStatus } from "./afk.js";
-import { formatReminderDuration, hasImageGenerationIntent, hasReminderIntent, hasRockPaperScissorsIntent, hasTicTacToeIntent, hasTtsIntent, parseGenerateImageCommand, parseReminderDuration, parseRockPaperScissorsCommand, parseSamSpeakCommand, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand, parseTicTacToeCommand } from "../logic.js";
+import {
+  formatReminderDuration,
+  hasImageGenerationIntent,
+  hasReminderIntent,
+  hasRockPaperScissorsIntent,
+  hasTicTacToeIntent,
+  hasTtsIntent,
+  parseGenerateImageCommand,
+  parseReminderDuration,
+  parseRockPaperScissorsCommand,
+  parseSamSpeakCommand,
+  parseSetAfkCommand,
+  parseSetReminderCommand,
+  parseShowAvatarCommand,
+  parseTicTacToeCommand,
+} from "../logic.js";
 import { createReminder } from "./reminders.js";
 import { reserveVoiceMessage, type VoiceReservation } from "./tts.js";
 import { generateGuildImage } from "./image-generation.js";
+import {
+  executeChannelManagementCommand,
+  parseChannelManagementCommand,
+} from "./channel-management.js";
 
 const activePrompts = new Set<string>();
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -46,8 +65,16 @@ function getThreadChannelId(channel: TextBasedChannel): string | undefined {
 }
 
 export async function runChat(args: {
-  prompt: string; user: User; member: GuildMember | null; guildId?: string; guildName?: string;
-  channel: TextBasedChannel; channelId: string; messageTimestamp?: number; sourceMessageId?: string; referencedMessageId?: string;
+  prompt: string;
+  user: User;
+  member: GuildMember | null;
+  guildId?: string;
+  guildName?: string;
+  channel: TextBasedChannel;
+  channelId: string;
+  messageTimestamp?: number;
+  sourceMessageId?: string;
+  referencedMessageId?: string;
   reply: (content: string) => Promise<Message>;
   edit?: (content: string) => Promise<unknown>;
   onAfkSet?: (reason: string, placeholder: Message) => Promise<void>;
@@ -67,6 +94,7 @@ export async function runChat(args: {
   if (existingAfk) {
     await clearAfkStatus(args.user.id, args.guildId);
   }
+
   const threadId = getThreadChannelId(args.channel);
   const conversationChannelId = threadId ?? args.channelId;
   const key = resolveThreadConversationKey(args.guildId, threadId, args.user.id);
@@ -76,23 +104,27 @@ export async function runChat(args: {
 
   activePrompts.add(key);
   let voiceReservation: VoiceReservation | undefined;
+
   try {
     if ("sendTyping" in args.channel) await args.channel.sendTyping();
     const placeholder = await args.reply("Thinking…");
     const editResponse = args.edit ?? (content => placeholder.edit(content));
+
     if (hasTtsIntent(prompt)) {
       voiceReservation = reserveVoiceMessage({ channel: args.channel, channelId: args.channelId });
       await editResponse("Generating voice…").catch(() => undefined);
     }
+
     if (existingAfk) await args.onWelcomeBack?.(existingAfk);
+
     const settings = await getSettings(args.user.id, args.guildId);
     const history = await getHistory(args.user.id, args.guildId, conversationChannelId, settings.vip ? 12 : 5);
-    // discord.js uses camelCase property names: User.globalName, User.username,
-    // GuildMember.displayName, GuildMember.nickname, and Guild.name.
+
     const userName = args.user.globalName ?? args.user.username;
     const serverNickname = args.member?.nickname ?? "None";
     const startedAt = Date.now();
     let answer = "";
+
     await streamAnswer({
       prompt,
       userName,
@@ -101,26 +133,39 @@ export async function runChat(args: {
       settings,
       history,
       messageTimestamp: args.messageTimestamp ?? Date.now(),
-       reminderActionEnabled: hasReminderIntent(prompt),
+      reminderActionEnabled: hasReminderIntent(prompt),
       ttsActionEnabled: hasTtsIntent(prompt),
       imageGenerationActionEnabled: hasImageGenerationIntent(prompt),
       rockPaperScissorsActionEnabled: hasRockPaperScissorsIntent(prompt),
       ticTacToeActionEnabled: hasTicTacToeIntent(prompt),
       onDelta: text => { answer += text; },
     });
+
     const afkCommand = parseSetAfkCommand(answer);
-    // Like the AFK protocol, the complete AI action syntax is the execution trigger.
-    // Intent detection only controls whether the extra reminder instructions are sent.
     const reminderCommand = parseSetReminderCommand(answer);
     const avatarCommand = parseShowAvatarCommand(answer);
     const imageCommand = parseGenerateImageCommand(answer);
     const rockPaperScissorsCommand = hasRockPaperScissorsIntent(prompt)
       ? parseRockPaperScissorsCommand(answer)
       : null;
-    // The exact AI action is the execution trigger; don't gate it on the user's
-    // phrasing a second time or a valid action can be shown as plain text.
     const ticTacToeCommand = parseTicTacToeCommand(answer);
+
+    const channelManagementCommand = parseChannelManagementCommand(answer);
+
     let actionResponseHandled = false;
+
+    if (channelManagementCommand) {
+      const guild = "guild" in args.channel && args.channel.guild ? args.channel.guild : null;
+      if (!guild) {
+        answer = "This admin action can only be used in a server channel.";
+      } else {
+        const result = await executeChannelManagementCommand(guild, channelManagementCommand);
+        answer = result.message;
+        actionResponseHandled = true;
+        await editResponse(answer).catch(() => undefined);
+      }
+    }
+
     if (afkCommand) {
       const reason = normalizeAfkReason(afkCommand.reason);
       await setAfkStatus(args.user.id, args.guildId, reason, args.messageTimestamp ?? Date.now());
@@ -130,6 +175,7 @@ export async function runChat(args: {
         actionResponseHandled = true;
       }
     }
+
     if (reminderCommand) {
       const durationSeconds = parseReminderDuration(reminderCommand.duration);
       if (durationSeconds === null) {
@@ -150,15 +196,17 @@ export async function runChat(args: {
         }
       }
     }
+
     const samSpeakCommand = parseSamSpeakCommand(answer);
-      if (samSpeakCommand) {
-        const reservation = voiceReservation ?? reserveVoiceMessage({ channel: args.channel, channelId: args.channelId });
-        if (!voiceReservation) await editResponse("Generating voice…").catch(() => undefined);
-        const sent = await reservation.complete(samSpeakCommand.text);
-        answer = sent ? "🔊 Sent a voice message!" : "I couldn't send the voice message in this channel.";
-        await editResponse(answer).catch(() => undefined);
-        actionResponseHandled = true;
-      }
+    if (samSpeakCommand) {
+      const reservation = voiceReservation ?? reserveVoiceMessage({ channel: args.channel, channelId: args.channelId });
+      if (!voiceReservation) await editResponse("Generating voice…").catch(() => undefined);
+      const sent = await reservation.complete(samSpeakCommand.text);
+      answer = sent ? "🔊 Sent a voice message!" : "I couldn't send the voice message in this channel.";
+      await editResponse(answer).catch(() => undefined);
+      actionResponseHandled = true;
+    }
+
     if (imageCommand) {
       if (!args.guildId) {
         answer = "Image generation is only available in a Discord server, not in direct messages.";
@@ -182,6 +230,7 @@ export async function runChat(args: {
         }
       }
     }
+
     if (avatarCommand) {
       answer = "Here is the avatar you asked for.";
       if (args.onAvatar) {
@@ -189,6 +238,7 @@ export async function runChat(args: {
         actionResponseHandled = true;
       }
     }
+
     if (rockPaperScissorsCommand) {
       answer = "Started a game of Rock, Paper, Scissors.";
       if (args.onRockPaperScissors) {
@@ -196,6 +246,7 @@ export async function runChat(args: {
         actionResponseHandled = true;
       }
     }
+
     if (ticTacToeCommand) {
       answer = "Started a game of Tic-Tac-Toe.";
       if (args.onTicTacToe) {
@@ -203,7 +254,8 @@ export async function runChat(args: {
         actionResponseHandled = true;
       }
     }
-        if (!actionResponseHandled) {
+
+    if (!actionResponseHandled) {
       const chunks = splitDiscordMessage(answer);
       const editMessage = editResponse;
       await editMessage(chunks[0]);
@@ -217,6 +269,7 @@ export async function runChat(args: {
         }
       }
     }
+
     const responseTimeMs = Date.now() - startedAt;
     await recordResponseMetric(args.user.id, args.guildId, conversationChannelId, responseTimeMs);
     await addHistory(args.user.id, args.guildId, conversationChannelId, { role: "user", content: prompt }, args.sourceMessageId, args.referencedMessageId);
