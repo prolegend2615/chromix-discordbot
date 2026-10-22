@@ -28,6 +28,8 @@ import {
   executeChannelManagementCommand,
   parseChannelManagementCommand,
 } from "./channel-management.js";
+import { config } from "../config.js";
+import { runWebSearchAgent, searchWeb, formatWebSearchSources } from "./web-search.js";
 
 const activePrompts = new Set<string>();
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -129,24 +131,37 @@ export async function runChat(args: {
     const userName = args.user.globalName ?? args.user.username;
     const serverNickname = args.member?.nickname ?? "None";
     const startedAt = Date.now();
-    let answer = "";
-
-    await streamAnswer({
-      prompt,
-      userName,
-      serverNickname,
-      guildName: args.guildName ?? "Direct Message",
-      settings,
-      history,
-      messageTimestamp: args.messageTimestamp ?? Date.now(),
-      adminChatActionEnabled: args.adminChat,
-      reminderActionEnabled: !args.adminChat && hasReminderIntent(prompt),
-      ttsActionEnabled: !args.adminChat && hasTtsIntent(prompt),
-      imageGenerationActionEnabled: !args.adminChat && hasImageGenerationIntent(prompt),
-      rockPaperScissorsActionEnabled: !args.adminChat && hasRockPaperScissorsIntent(prompt),
-      ticTacToeActionEnabled: !args.adminChat && hasTicTacToeIntent(prompt),
-      onDelta: text => { answer += text; },
+    const webSearch = await runWebSearchAgent({
+      enabled: !args.adminChat,
+      ask: async context => {
+        let response = "";
+        await streamAnswer({
+          prompt,
+          userName,
+          serverNickname,
+          guildName: args.guildName ?? "Direct Message",
+          settings,
+          history,
+          messageTimestamp: args.messageTimestamp ?? Date.now(),
+          adminChatActionEnabled: args.adminChat,
+          reminderActionEnabled: !args.adminChat && hasReminderIntent(prompt),
+          ttsActionEnabled: !args.adminChat && hasTtsIntent(prompt),
+          imageGenerationActionEnabled: !args.adminChat && hasImageGenerationIntent(prompt),
+          rockPaperScissorsActionEnabled: !args.adminChat && hasRockPaperScissorsIntent(prompt),
+          ticTacToeActionEnabled: !args.adminChat && hasTicTacToeIntent(prompt),
+          webSearchActionEnabled: context.availableProviders.length > 0,
+          webSearchAvailableProviders: context.availableProviders,
+          webSearchFeedback: context.feedback,
+          onDelta: text => { response += text; },
+        });
+        return response;
+      },
+      search: (provider, query) => searchWeb(provider, query, {
+        apiKey: provider === "brave" ? config.braveSearchApiKey : config.exaApiKey,
+      }),
+      onSearchStart: () => editResponse("Searching the web…"),
     });
+    let answer = webSearch.answer;
 
     const afkCommand = args.adminChat ? null : parseSetAfkCommand(answer);
     const reminderCommand = args.adminChat ? null : parseSetReminderCommand(answer);
@@ -156,8 +171,22 @@ export async function runChat(args: {
       ? parseRockPaperScissorsCommand(answer)
       : null;
     const ticTacToeCommand = args.adminChat ? null : parseTicTacToeCommand(answer);
+    const samSpeakCommand = args.adminChat ? null : parseSamSpeakCommand(answer);
 
     const channelManagementCommand = args.adminChat ? parseChannelManagementCommand(answer) : null;
+    const hasToolAction = Boolean(
+      afkCommand
+      || reminderCommand
+      || avatarCommand
+      || imageCommand
+      || rockPaperScissorsCommand
+      || ticTacToeCommand
+      || samSpeakCommand
+      || channelManagementCommand,
+    );
+    if (webSearch.results.length && !hasToolAction) {
+      answer = `${answer}${formatWebSearchSources(webSearch.results)}`;
+    }
 
     let actionResponseHandled = false;
 
@@ -204,7 +233,6 @@ export async function runChat(args: {
       }
     }
 
-    const samSpeakCommand = args.adminChat ? null : parseSamSpeakCommand(answer);
     if (samSpeakCommand) {
       const reservation = voiceReservation ?? reserveVoiceMessage({ channel: args.channel, channelId: args.channelId });
       if (!voiceReservation) await editResponse("Generating voice…").catch(() => undefined);

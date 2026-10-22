@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { classifyProviderError, evaluateImageGenerationQuota, extractMentionId, formatReminderDuration, getRockPaperScissorsWinner, getTicTacToeBotMoves, getTicTacToeWinner, hasAvatarIntent, hasImageGenerationIntent, hasReminderIntent, hasRockPaperScissorsIntent, hasTicTacToeIntent, hasTimeWord, isModelAvailable, isTransientNetworkError, parseGenerateImageCommand, parsePrefixCommand, parseReminderDuration, parseRockPaperScissorsCommand, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand, parseTicTacToeCommand, userFacingProviderError } from "../src/logic.js";
+import { classifyProviderError, evaluateImageGenerationQuota, extractMentionId, formatReminderDuration, getRockPaperScissorsWinner, getTicTacToeBotMoves, getTicTacToeWinner, hasAvatarIntent, hasImageGenerationIntent, hasReminderIntent, hasRockPaperScissorsIntent, hasTicTacToeIntent, hasTimeWord, isModelAvailable, isTransientNetworkError, parseGenerateImageCommand, parsePrefixCommand, parseReminderDuration, parseRockPaperScissorsCommand, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand, parseTicTacToeCommand, parseWebSearchCommand, userFacingProviderError } from "../src/logic.js";
 
 test("parses prefix commands and arguments case-insensitively", () => {
   assert.deepEqual(parsePrefixCommand("  C.CHAT hello world"), { name: "chat", args: ["hello", "world"] });
@@ -18,6 +18,20 @@ test("matches only the standalone time word", () => {
   assert.equal(hasTimeWord("What TIME is it?"), true);
   assert.equal(hasTimeWord("sometimes"), false);
   assert.equal(hasTimeWord("timely"), false);
+});
+
+test("parses provider-specific web search actions and rejects malformed actions", () => {
+  assert.deepEqual(parseWebSearchCommand("use search_brave (latest Discord.js release)"), {
+    provider: "brave",
+    query: "latest Discord.js release",
+  });
+  assert.deepEqual(parseWebSearchCommand(" USE SEARCH_EXA (semantic query (with detail)) "), {
+    provider: "exa",
+    query: "semantic query (with detail)",
+  });
+  assert.equal(parseWebSearchCommand("use search_brave ()"), null);
+  assert.equal(parseWebSearchCommand("use search_exa (query) and then answer"), null);
+  assert.equal(parseWebSearchCommand(`use search_exa (${ "x".repeat(501) })`), null);
 });
 
 test("recognizes transient Discord connection failures", () => {

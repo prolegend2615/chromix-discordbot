@@ -15,4 +15,6 @@ export const config = {
   openrouterApiKey: process.env.OPENROUTER_API_KEY,
   openrouterTtsVoice: process.env.OPENROUTER_TTS_VOICE ?? "flux-alexis-en",
   pollinationsApiKey: process.env.POLLINATIONS_API_KEY,
+  braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY,
+  exaApiKey: process.env.EXA_API_KEY,
 };

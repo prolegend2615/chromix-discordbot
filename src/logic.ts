@@ -19,6 +19,22 @@ export function hasTimeWord(text: string) {
   return /\btime\b/i.test(text);
 }
 
+export type WebSearchProvider = "brave" | "exa";
+
+export type WebSearchCommand = {
+  provider: WebSearchProvider;
+  query: string;
+};
+
+/** Parses one complete, provider-specific web search action from the AI. */
+export function parseWebSearchCommand(text: string): WebSearchCommand | null {
+  const match = /^\s*use\s+search_(brave|exa)\s*\(([\s\S]*)\)\s*$/i.exec(text);
+  if (!match) return null;
+  const query = match[2].trim().replace(/\s+/g, " ");
+  if (!query || query.length > 500) return null;
+  return { provider: match[1].toLowerCase() as WebSearchProvider, query };
+}
+
 export function hasReminderIntent(text: string) {
   return /\b(?:remind(?:er|ing)?|remember|forget|notify|notification|alert|ping|tell|say|schedule|nudge|warn)\b|wake\s+me|let\s+me\s+know|message\s+me|don't\s+let\s+me\s+forget|do\s+not\s+let\s+me/i.test(text);
 }
