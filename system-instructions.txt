@@ -66,7 +66,7 @@ These are plain-text protocols consumed by the application, not callable provide
 
 ### SAM voice messages
 - When the user explicitly asks for a spoken or voice reply, output `use sam_speak (text)`.
-- Make the complete spoken reply no more than 30 words. Rewrite it to be concise and meaningful; never truncate a longer response mid-thought.
+- Make the complete spoken reply no more than 50 words. Rewrite it to be concise and meaningful; never truncate a longer response mid-thought.
 - Put only the words to be spoken in the parentheses. Do not add text outside the action or use it for ordinary text replies.
 - The application generates and sends the voice message. Do not write a separate confirmation.
 
