@@ -3,7 +3,7 @@ import Groq from "groq-sdk";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { config } from "../config.js";
-import { hasAvatarIntent, hasImageGenerationIntent, hasTimeWord, type WebSearchProvider } from "../logic.js";
+import { hasAvatarIntent, hasImageGenerationIntent, hasTimeWord, isNativeToolChoiceConflictError, type WebSearchProvider } from "../logic.js";
 import type { Settings } from "./settings.js";
 import type { HistoryMessage } from "./history.js";
 import { getAdminChatSystemPrompt } from "./channel-management.js";
@@ -18,6 +18,7 @@ const MAX_OUTPUT_TOKENS: Record<Settings["response_length"], number> = {
   Detailed: 2500,
 };
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
+const GROQ_TEXT_FALLBACK_MODEL = "llama-3.3-70b-versatile";
 
 function readGlobalInstructions(): string {
   try {
@@ -314,19 +315,37 @@ export async function streamAnswer(input: {
 
   if (input.settings.provider === "groq") {
     if (!groq) throw new Error("Groq is not configured. Add GROQ_API_KEY to .env and restart the bot.");
-    const stream = await groq.chat.completions.create({
-      model: input.settings.model,
-      stream: true,
-      max_completion_tokens: MAX_OUTPUT_TOKENS[input.settings.response_length],
-      messages: [
-        { role: "system", content: system },
-        ...input.history.map(item => ({ role: item.role, content: item.content })),
-        { role: "user", content: input.prompt },
-      ],
-    });
-    for await (const chunk of stream) {
-      input.onDelta(chunk.choices[0]?.delta?.content ?? "");
+    const requestWithModel = async (model: string) => {
+      const stream = await groq.chat.completions.create({
+        model,
+        stream: true,
+        max_completion_tokens: MAX_OUTPUT_TOKENS[input.settings.response_length],
+        messages: [
+          { role: "system", content: system },
+          ...input.history.map(item => ({ role: item.role, content: item.content })),
+          { role: "user", content: input.prompt },
+        ],
+      });
+      let response = "";
+      for await (const chunk of stream) {
+        response += chunk.choices[0]?.delta?.content ?? "";
+      }
+      return response;
+    };
+
+    let response: string;
+    try {
+      response = await requestWithModel(input.settings.model);
+    } catch (error) {
+      if (!isNativeToolChoiceConflictError(error) || input.settings.model === GROQ_TEXT_FALLBACK_MODEL) {
+        throw error;
+      }
+      console.warn(
+        `Groq model ${input.settings.model} attempted a native tool call with no tools registered; retrying this reply with ${GROQ_TEXT_FALLBACK_MODEL}.`,
+      );
+      response = await requestWithModel(GROQ_TEXT_FALLBACK_MODEL);
     }
+    if (response) input.onDelta(response);
     return;
   }
 

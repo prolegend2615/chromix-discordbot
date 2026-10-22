@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { classifyProviderError, evaluateImageGenerationQuota, extractMentionId, formatReminderDuration, getRockPaperScissorsWinner, getTicTacToeBotMoves, getTicTacToeWinner, hasAvatarIntent, hasImageGenerationIntent, hasReminderIntent, hasRockPaperScissorsIntent, hasTicTacToeIntent, hasTimeWord, isModelAvailable, isTransientNetworkError, parseGenerateImageCommand, parsePrefixCommand, parseReminderDuration, parseRockPaperScissorsCommand, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand, parseTicTacToeCommand, parseWebSearchCommand, userFacingProviderError } from "../src/logic.js";
+import { classifyProviderError, evaluateImageGenerationQuota, extractMentionId, formatReminderDuration, getRockPaperScissorsWinner, getTicTacToeBotMoves, getTicTacToeWinner, hasAvatarIntent, hasImageGenerationIntent, hasReminderIntent, hasRockPaperScissorsIntent, hasTicTacToeIntent, hasTimeWord, isModelAvailable, isNativeToolChoiceConflictError, isTransientNetworkError, parseGenerateImageCommand, parsePrefixCommand, parseReminderDuration, parseRockPaperScissorsCommand, parseSetAfkCommand, parseSetReminderCommand, parseShowAvatarCommand, parseTicTacToeCommand, parseWebSearchCommand, userFacingProviderError } from "../src/logic.js";
 
 test("parses prefix commands and arguments case-insensitively", () => {
   assert.deepEqual(parsePrefixCommand("  C.CHAT hello world"), { name: "chat", args: ["hello", "world"] });
@@ -37,6 +37,13 @@ test("parses provider-specific web search actions and rejects malformed actions"
 test("recognizes transient Discord connection failures", () => {
   assert.equal(isTransientNetworkError(Object.assign(new Error("Connect Timeout Error"), { code: "UND_ERR_CONNECT_TIMEOUT" })), true);
   assert.equal(isTransientNetworkError(new Error("401 Unauthorized")), false);
+});
+
+test("recognizes the Groq native-tool-choice conflict without matching unrelated errors", () => {
+  assert.equal(isNativeToolChoiceConflictError(new Error("400 Bad Request: Tool choice is none, but model called a tool")), true);
+  assert.equal(isNativeToolChoiceConflictError({ error: { message: "Tool choice is none, but model called a tool" } }), true);
+  assert.equal(isNativeToolChoiceConflictError(new Error("Tool choice is required, but model did not call a tool")), false);
+  assert.equal(isNativeToolChoiceConflictError(new Error("429 Too Many Requests")), false);
 });
 
 test("detects reminder intent without forcing the action for every chat", () => {

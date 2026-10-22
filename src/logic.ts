@@ -46,6 +46,16 @@ export function isTransientNetworkError(error: unknown) {
   return /UND_ERR_CONNECT_TIMEOUT|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENETUNREACH|EAI_AGAIN|connect timeout|fetch failed|network is unreachable/i.test(`${code} ${text}`);
 }
 
+export function isNativeToolChoiceConflictError(error: unknown) {
+  let text = error instanceof Error ? error.message : String(error);
+  try {
+    text += ` ${JSON.stringify(error)}`;
+  } catch {
+    // The message above is enough for circular or otherwise non-serializable errors.
+  }
+  return /tool choice is none,\s*but model called a tool/i.test(text);
+}
+
 export type SetAfkCommand = {
   reason: string;
 };
