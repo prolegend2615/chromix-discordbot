@@ -1,6 +1,6 @@
 export const MODELS = {
   gemini: ["gemini-3.6-flash"],
-  groq: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-20b"],
+  xkiro: ["qwen/qwen3.8-max:free"],
   openrouter: ["google/gemini-3.6-flash", "deepseek/deepseek-v4-flash", "mistralai/mistral-small-2603"],
 } as const;
 
@@ -44,16 +44,6 @@ export function isTransientNetworkError(error: unknown) {
   const code = typeof value?.code === "string" ? value.code : "";
   const text = error instanceof Error ? error.message : String(error);
   return /UND_ERR_CONNECT_TIMEOUT|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENETUNREACH|EAI_AGAIN|connect timeout|fetch failed|network is unreachable/i.test(`${code} ${text}`);
-}
-
-export function isNativeToolChoiceConflictError(error: unknown) {
-  let text = error instanceof Error ? error.message : String(error);
-  try {
-    text += ` ${JSON.stringify(error)}`;
-  } catch {
-    // The message above is enough for circular or otherwise non-serializable errors.
-  }
-  return /tool choice is none,\s*but model called a tool/i.test(text);
 }
 
 export type SetAfkCommand = {

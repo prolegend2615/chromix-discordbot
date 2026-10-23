@@ -1,11 +1,11 @@
 # Discord AI Bot
 
-An AI-only Discord bot with prefix, slash-command, mention, and reply prompts. It stores settings and history in SQLite. Gemini `gemini-2.5-flash` is the default model; users can select a supported Groq model from `/settings`.
+An AI-only Discord bot with prefix, slash-command, mention, and reply prompts. It stores settings and history in SQLite. Gemini `gemini-3.6-flash` is the default model; users can choose Gemini, Xkiro, or OpenRouter in `/settings`. If the selected provider fails, Chromix tries other configured providers automatically.
 
 ## Setup
 
 1. Copy `.env.example` to `.env` and fill in the values.
-2. Add `GEMINI_API_KEY`; add `GROQ_API_KEY` as well if you want Groq selectable.
+2. Add `GEMINI_API_KEY`. `OPENROUTER_API_KEY` enables OpenRouter in `/settings` and as a fallback. `XKIRO_API_KEY` enables Xkiro in `/settings` and as a fallback. Optional `APINEX_API_KEY` and `VYCEAI_API_KEY` enable automatic fallbacks; they are not selectable in `/settings`.
 3. Install dependencies with `npm install`.
 4. Register commands with `npm run register`.
 5. Start the bot with `npm run dev`.
@@ -39,7 +39,7 @@ Edit [`system-instructions.txt`](system-instructions.txt) to control how the AI 
 
 ## Flux TTS voice replies
 
-Set OPENROUTER_API_KEY to enable Deepgram Flux TTS voice replies through OpenRouter. Set OPENROUTER_TTS_VOICE to choose a supported Flux voice; the default is flux-alexis-en. Voice requests in the same channel are reserved and processed in FIFO order. The bot displays “Generating voice…” while waiting, tries Flux first, and automatically falls back to the local SAM WAV voice if Flux or delivery fails.
+Set `OPENROUTER_API_KEY` to enable Deepgram Flux TTS voice replies through OpenRouter. Set `OPENROUTER_TTS_VOICE` to choose a supported Flux voice; the default is `flux-alexis-en`. Voice requests in the same channel are reserved and processed in FIFO order. The bot displays “Generating voice…” while waiting, tries Flux first, and automatically falls back to the local SAM WAV voice if Flux or delivery fails.
 
 ## AI image generation
 

@@ -1,16 +1,15 @@
 import { GoogleGenAI } from "@google/genai";
-import Groq from "groq-sdk";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { config } from "../config.js";
-import { hasAvatarIntent, hasImageGenerationIntent, hasTimeWord, isNativeToolChoiceConflictError, type WebSearchProvider } from "../logic.js";
+import { hasAvatarIntent, hasImageGenerationIntent, hasTimeWord, MODELS, type WebSearchProvider } from "../logic.js";
 import type { Settings } from "./settings.js";
 import type { HistoryMessage } from "./history.js";
 import { getAdminChatSystemPrompt } from "./channel-management.js";
 import type { WebSearchFeedback } from "./web-search.js";
+import { generateWithProviderFallback, requestOpenAICompatibleChat, type ProviderAttempt } from "./ai-providers.js";
 
 const gemini = new GoogleGenAI({ apiKey: config.geminiApiKey });
-const groq = config.groqApiKey ? new Groq({ apiKey: config.groqApiKey }) : undefined;
 const systemInstructionsPath = resolve("system-instructions.txt");
 const MAX_OUTPUT_TOKENS: Record<Settings["response_length"], number> = {
   Short: 500,
@@ -18,7 +17,12 @@ const MAX_OUTPUT_TOKENS: Record<Settings["response_length"], number> = {
   Detailed: 2500,
 };
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
-const GROQ_TEXT_FALLBACK_MODEL = "llama-3.3-70b-versatile";
+const XKIRO_CHAT_URL = "https://api.xkiro.com/v1/chat/completions";
+const APINEX_CHAT_URL = "https://api.apinex.bond/v1/chat/completions";
+const VYCEAI_CHAT_URL = "https://vyceai.com/v1/chat/completions";
+const XKIRO_MODEL = "qwen/qwen3.8-max:free";
+const APINEX_MODELS = ["free/gpt-6-luna", "free/gemini-3.8-flash"] as const;
+const VYCEAI_MODEL = "glm-5.3-flash";
 
 function readGlobalInstructions(): string {
   try {
@@ -50,8 +54,7 @@ async function streamOpenRouter(input: {
   settings: Settings;
   history: HistoryMessage[];
   system: string;
-  onDelta: (text: string) => void;
-}) {
+}) : Promise<string> {
   if (!config.openrouterApiKey) {
     throw new Error("OpenRouter is not configured. Add OPENROUTER_API_KEY to the environment and restart the bot.");
   }
@@ -77,8 +80,7 @@ async function streamOpenRouter(input: {
   });
 
   if (!response.ok) {
-    const details = await response.text();
-    throw new Error(`OpenRouter request failed (${response.status}): ${details.slice(0, 500)}`);
+    throw new Error(`OpenRouter request failed with HTTP ${response.status}.`);
   }
   if (!response.body) throw new Error("OpenRouter returned an empty response stream.");
 
@@ -86,6 +88,7 @@ async function streamOpenRouter(input: {
   const decoder = new TextDecoder();
   let buffer = "";
   let done = false;
+  let result = "";
 
   const processLine = (line: string) => {
     if (!line.startsWith("data:")) return;
@@ -96,7 +99,7 @@ async function streamOpenRouter(input: {
     }
     const chunk = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string | null } }> };
     const content = chunk.choices?.[0]?.delta?.content;
-    if (content) input.onDelta(content);
+    if (content) result += content;
   };
 
   while (!done) {
@@ -108,6 +111,88 @@ async function streamOpenRouter(input: {
     if (readerDone) break;
   }
   if (buffer) processLine(buffer.trimEnd());
+  if (!result.trim()) throw new Error("OpenRouter returned an empty response.");
+  return result;
+}
+
+function buildChatMessages(system: string, history: HistoryMessage[], prompt: string) {
+  return [
+    { role: "system" as const, content: system },
+    ...history.map(item => ({ role: item.role, content: item.content })),
+    { role: "user" as const, content: prompt },
+  ];
+}
+
+function buildProviderAttempts(input: {
+  prompt: string;
+  settings: Settings;
+  history: HistoryMessage[];
+  system: string;
+}): ProviderAttempt[] {
+  const messages = buildChatMessages(input.system, input.history, input.prompt);
+  const maxTokens = MAX_OUTPUT_TOKENS[input.settings.response_length];
+  const attempts: ProviderAttempt[] = [];
+  const addGemini = (model: string) => attempts.push({
+    provider: "Gemini",
+    model,
+    generate: async () => {
+      const stream = await gemini.models.generateContentStream({
+        model,
+        contents: [
+          ...input.history.map(item => ({ role: item.role === "assistant" ? "model" : "user", parts: [{ text: item.content }] })),
+          { role: "user", parts: [{ text: input.prompt }] },
+        ],
+        config: { systemInstruction: input.system, maxOutputTokens: maxTokens },
+      });
+      let result = "";
+      for await (const chunk of stream) result += chunk.text ?? "";
+      if (!result.trim()) throw new Error("Gemini returned an empty response.");
+      return result;
+    },
+  });
+  const addOpenRouter = (model: string) => attempts.push({
+    provider: "OpenRouter",
+    model,
+    generate: () => streamOpenRouter({ ...input, settings: { ...input.settings, model }, system: input.system }),
+  });
+  const addFallbackApi = (provider: string, endpoint: string, apiKey: string | undefined, model: string) => attempts.push({
+    provider,
+    model,
+    generate: () => {
+      if (!apiKey) throw new Error(`${provider} is not configured; add its API key to the bot environment.`);
+      return requestOpenAICompatibleChat({
+        provider,
+        endpoint,
+        apiKey,
+        model,
+        messages,
+        maxTokens,
+      });
+    },
+  });
+
+  if (input.settings.provider === "gemini") addGemini(input.settings.model);
+  else if (input.settings.provider === "openrouter") addOpenRouter(input.settings.model);
+  else addFallbackApi("Xkiro", XKIRO_CHAT_URL, config.xkiroApiKey, input.settings.model);
+
+  if (input.settings.provider === "gemini") {
+    if (config.openrouterApiKey) addOpenRouter(MODELS.openrouter[0]);
+  } else {
+    addGemini(MODELS.gemini[0]);
+    if (input.settings.provider === "xkiro" && config.openrouterApiKey) addOpenRouter(MODELS.openrouter[0]);
+  }
+
+  if (input.settings.provider !== "xkiro" && config.xkiroApiKey) {
+    addFallbackApi("Xkiro", XKIRO_CHAT_URL, config.xkiroApiKey, XKIRO_MODEL);
+  }
+  if (config.apinexApiKey) {
+    for (const model of APINEX_MODELS) addFallbackApi("APInex", APINEX_CHAT_URL, config.apinexApiKey, model);
+  }
+  if (config.vyceaiApiKey) {
+    addFallbackApi("VyceAI", VYCEAI_CHAT_URL, config.vyceaiApiKey, VYCEAI_MODEL);
+  }
+
+  return attempts;
 }
 
 const personaInstructions: Record<Settings["persona"], string> = {
@@ -300,59 +385,17 @@ export async function streamAnswer(input: {
     timeContext,
   ].filter(Boolean).join("\n");
 
-  if (input.settings.provider === "gemini") {
-    const stream = await gemini.models.generateContentStream({
-      model: input.settings.model,
-      contents: [
-        ...input.history.map(item => ({ role: item.role === "assistant" ? "model" : "user", parts: [{ text: item.content }] })),
-        { role: "user", parts: [{ text: input.prompt }] },
-      ],
-      config: { systemInstruction: system, maxOutputTokens: MAX_OUTPUT_TOKENS[input.settings.response_length] },
-    });
-    for await (const chunk of stream) input.onDelta(chunk.text ?? "");
-    return;
-  }
-
-  if (input.settings.provider === "groq") {
-    if (!groq) throw new Error("Groq is not configured. Add GROQ_API_KEY to .env and restart the bot.");
-    const requestWithModel = async (model: string) => {
-      const stream = await groq.chat.completions.create({
-        model,
-        stream: true,
-        max_completion_tokens: MAX_OUTPUT_TOKENS[input.settings.response_length],
-        messages: [
-          { role: "system", content: system },
-          ...input.history.map(item => ({ role: item.role, content: item.content })),
-          { role: "user", content: input.prompt },
-        ],
-      });
-      let response = "";
-      for await (const chunk of stream) {
-        response += chunk.choices[0]?.delta?.content ?? "";
-      }
-      return response;
-    };
-
-    let response: string;
-    try {
-      response = await requestWithModel(input.settings.model);
-    } catch (error) {
-      if (!isNativeToolChoiceConflictError(error) || input.settings.model === GROQ_TEXT_FALLBACK_MODEL) {
-        throw error;
-      }
+  const result = await generateWithProviderFallback(
+    buildProviderAttempts({ ...input, system }),
+    (attempt, error, remaining) => {
       console.warn(
-        `Groq model ${input.settings.model} attempted a native tool call with no tools registered; retrying this reply with ${GROQ_TEXT_FALLBACK_MODEL}.`,
+        `[AI] ${attempt.provider} (${attempt.model}) failed; ${remaining} fallback attempt(s) remain.`,
+        error instanceof Error ? error.message : error,
       );
-      response = await requestWithModel(GROQ_TEXT_FALLBACK_MODEL);
-    }
-    if (response) input.onDelta(response);
-    return;
+    },
+  );
+  if (result.attemptNumber > 1) {
+    console.info(`[AI] Recovered with ${result.provider} (${result.model}) after ${result.attemptNumber - 1} failed attempt(s).`);
   }
-
-  if (input.settings.provider === "openrouter") {
-    await streamOpenRouter({ ...input, system });
-    return;
-  }
-
-  throw new Error(`Unsupported AI provider: ${input.settings.provider}`);
+  input.onDelta(result.text);
 }

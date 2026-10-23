@@ -16,5 +16,6 @@ export const dbPromise = (async () => {
   if (!columns.some(c => c.name === "custom_persona")) await db.exec("ALTER TABLE user_settings ADD COLUMN custom_persona TEXT NOT NULL DEFAULT ''");
   if (!columns.some(c => c.name === "blacklisted")) await db.exec("ALTER TABLE user_settings ADD COLUMN blacklisted INTEGER NOT NULL DEFAULT 0");
   await db.exec("UPDATE user_settings SET model = 'gemini-3.6-flash' WHERE model = 'gemini-2.5-flash'");
+  await db.exec("UPDATE user_settings SET provider = 'gemini', model = 'gemini-3.6-flash' WHERE provider = 'groq'");
   return db;
 })();

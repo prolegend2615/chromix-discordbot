@@ -207,7 +207,7 @@ const SETTINGS_EXPLANATION = [
 ].join("\n");
 
 function providerLabel(provider: Provider) {
-  return provider === "gemini" ? "Gemini" : provider === "groq" ? "Groq" : "OpenRouter";
+  return provider === "gemini" ? "Gemini" : provider === "xkiro" ? "Xkiro" : "OpenRouter";
 }
 
 function settingsEmbed(step: SettingsStep) {
@@ -258,7 +258,7 @@ async function settingsComponents(step: SettingsStep, userId: string, guildId?: 
       new StringSelectMenuBuilder().setCustomId("settings:provider").setPlaceholder(`Provider: ${providerLabel(settings.provider)}`)
         .addOptions([
           { label: "Gemini (default)", value: "gemini", default: settings.provider === "gemini" },
-          { label: "Groq", value: "groq", default: settings.provider === "groq" },
+          { label: "Xkiro", value: "xkiro", default: settings.provider === "xkiro" },
           { label: "OpenRouter", value: "openrouter", default: settings.provider === "openrouter" },
         ]),
     );
