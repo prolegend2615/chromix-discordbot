@@ -28,6 +28,9 @@ Edit [`system-instructions.txt`](system-instructions.txt) to control how the AI 
 - `/give-vip @user` (restricted to the configured owner ID)
 - `c.listen [channel]` / `/listen` (server administrators)
 - `c.ignore [channel]` / `/ignore` (server administrators)
+- `c.admin <request>` / `c.adminchat <request>` (server administrators; creates and manages text channels and categories)
+
+In admin chat, ask Chromix to build several categories and channels in one prompt. It creates categories first and assigns channels during creation, uses colorful Unicode emoji names such as `💬┃general` by default, and tracks channel-creation calls in SQLite to stay within the configured limit of 10 creations per rolling 10 minutes. If that limit is full, it shows a status and waits for the next slot.
 
 ## AI actions (through chat)
 

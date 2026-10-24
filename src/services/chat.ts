@@ -331,7 +331,8 @@ export async function runChat(args: {
                   : avatarCommand ? "Fetching that avatar…"
                     : samSpeakCommand ? "🔊 Generating your voice message…"
                       : rockPaperScissorsCommand || ticTacToeCommand ? "Starting your game…"
-                        : channelManagementCommand ? "Updating the server…"
+                        : channelManagementCommand?.action === "create_layout" ? "Building your server layout…"
+                          : channelManagementCommand ? "Updating the server…"
                           : "I couldn't use that tool request. Please try again.";
       await streamingEditor.reset(actionStatus).catch(() => undefined);
     }
@@ -343,7 +344,11 @@ export async function runChat(args: {
       if (!guild) {
         answer = "This admin action can only be used in a server channel.";
       } else {
-        const result = await executeChannelManagementCommand(guild, channelManagementCommand);
+        const result = await executeChannelManagementCommand(
+          guild,
+          channelManagementCommand,
+          message => editResponse(message).catch(() => undefined),
+        );
         answer = result.message;
         actionResponseHandled = true;
         await editResponse(answer).catch(() => undefined);

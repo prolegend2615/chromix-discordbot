@@ -371,7 +371,7 @@ function helpEmbed() {
       { name: "Polls and timers", value: "Ask me to create a poll now or later, or start a countdown timer. Timers show a live Discord relative timestamp and post a notice when they finish." },
       { name: "Scheduled messages", value: "Ask me to write and schedule a message in this channel, up to 30 days ahead. Scheduled posts do not trigger role or everyone mentions." },
       { name: "Server details", value: "Ask about member and channel counts, the highest role, or the server owner. I use Discord's cached server data; counts can lag until Discord updates the bot." },
-      { name: "Server admins", value: "`/listen` and `/ignore` control which channels allow the bot." },
+      { name: "Server admins", value: "`c.admin <request>` (or `c.adminchat <request>`) creates and manages text channels/categories. Batch layouts support multiple categories and channels. `/listen` and `/ignore` control which channels allow the bot." },
     );
 }
 
@@ -489,32 +489,34 @@ client.on(Events.MessageCreate, async message => {
         allowedMentions: { parse: [], repliedUser: false },
       });
     }
-    if (command.startsWith(`${prefix}adminchat`)) {
-  if (!isAdmin(message.member)) {
-    await message.reply({
-      content: "Only server administrators can use admin chat.",
-      allowedMentions: { repliedUser: false },
-    });
-    return;
-  }
-  const request = content.slice(`${prefix}adminchat`.length).trim();
-  if (!message.guild) {
-    await message.reply({
-      content: "Admin chat only works in a Discord server.",
-      allowedMentions: { repliedUser: false },
-    });
-    return;
-  }
-  if (!request) {
-    await message.reply({
-      content: "Usage: `c.adminchat <request>`",
-      allowedMentions: { repliedUser: false },
-    });
-    return;
-  }
-  await sendChatFromMessage(message, request, message.reference?.messageId, true);
-  return;
-}
+    const firstCommand = command.split(/\s+/, 1)[0];
+    const adminCommand = [`${prefix}admin`, `${prefix}adminchat`].find(candidate => candidate === firstCommand);
+    if (adminCommand) {
+      if (!isAdmin(message.member)) {
+        await message.reply({
+          content: "Only server administrators can use admin chat.",
+          allowedMentions: { repliedUser: false },
+        });
+        return;
+      }
+      const request = content.slice(adminCommand.length).trim();
+      if (!message.guild) {
+        await message.reply({
+          content: "Admin chat only works in a Discord server.",
+          allowedMentions: { repliedUser: false },
+        });
+        return;
+      }
+      if (!request) {
+        await message.reply({
+          content: "Usage: `c.admin <request>` (or `c.adminchat <request>`)",
+          allowedMentions: { repliedUser: false },
+        });
+        return;
+      }
+      await sendChatFromMessage(message, request, message.reference?.messageId, true);
+      return;
+    }
     if (command.startsWith(`${prefix}chat`)) return await sendChatFromMessage(message, content.slice(`${prefix}chat`.length));
     if (command === `${prefix}clear`) {
       await handleClearCommand(messageCommandContext(message), false);

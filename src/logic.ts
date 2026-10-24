@@ -28,15 +28,16 @@ export type WebSearchCommand = {
 
 /** Read a complete AI action at the end of a response, allowing prose before it
  * and the redundant closing parenthesis some providers add around the command. */
-function readAction(text: string, name: string, argumentCount: number): string[] | null {
+function readAction(text: string, name: string, argumentCount?: number): string[] | null {
   const pattern = new RegExp(`\\buse\\s+${name}\\b`, "i");
   const match = pattern.exec(text);
   if (!match) return null;
   let cursor = match.index + match[0].length;
   const args: string[] = [];
 
-  for (let index = 0; index < argumentCount; index += 1) {
+  for (let index = 0; argumentCount === undefined || index < argumentCount; index += 1) {
     while (/\s/.test(text[cursor] ?? "")) cursor += 1;
+    if (argumentCount === undefined && text[cursor] !== "(") break;
     if (text[cursor] !== "(") return null;
     cursor += 1;
     const start = cursor;
@@ -68,12 +69,12 @@ function readNoArgAction(text: string, name: string): boolean {
   return !/(?:["'`]|\b(?:example|format|syntax|command)\s*:)\s*$/i.test(preceding);
 }
 
-export function readToolActionArguments(text: string, name: string, argumentCount: number): string[] | null {
+export function readToolActionArguments(text: string, name: string, argumentCount?: number): string[] | null {
   return readAction(text, name, argumentCount);
 }
 
 export function hasToolAction(text: string): boolean {
-  return /\buse\s+(?:set_afk|set_reminder|sam_speak|show_avatar|generate_image|create_poll|set_timer|schedule_message|create_channel|create_category|delete_channel|delete_category|view_channels|rock_paper_scissors|tic_tac_toe|search_(?:brave|exa))\b/i.test(text);
+  return /\buse\s+(?:set_afk|set_reminder|sam_speak|show_avatar|generate_image|create_poll|set_timer|schedule_message|create_channel|create_category|create_layout|delete_channel|delete_category|view_channels|rock_paper_scissors|tic_tac_toe|search_(?:brave|exa))\b/i.test(text);
 }
 
 /** Parses one complete, provider-specific web search action from the AI. */
@@ -381,6 +382,7 @@ export function getTicTacToeBotMoves(board: TicTacToeBoard): number[] {
 export type ChannelManagementCommand =
   | { action: "create_channel"; name: string; categoryId?: string }
   | { action: "create_category"; name: string }
+  | { action: "create_layout"; groups: Array<{ categoryName?: string; channels: string[] }> }
   | { action: "delete_channel"; channelId: string }
   | { action: "delete_category"; categoryId: string };
 
@@ -397,6 +399,21 @@ export function hasChannelManagementIntent(text: string): boolean {
  *  - `use delete_category (categoryId)`
  */
 export function parseChannelManagementCommand(text: string): ChannelManagementCommand | null {
+  const layoutArgs = readAction(text, "create_layout");
+  if (layoutArgs) {
+    if (layoutArgs.length < 2 || layoutArgs.length % 2 !== 0) return null;
+    const groups: Array<{ categoryName?: string; channels: string[] }> = [];
+    for (let index = 0; index < layoutArgs.length; index += 2) {
+      const category = layoutArgs[index].trim();
+      const uncategorized = /^none$/i.test(category);
+      const categoryName = uncategorized ? undefined : category;
+      const channels = layoutArgs[index + 1].split("|").map(name => name.trim()).filter(Boolean);
+      if ((!uncategorized && !categoryName) || channels.length === 0) return null;
+      groups.push({ categoryName, channels });
+    }
+    return { action: "create_layout", groups };
+  }
+
   // Create channel: use create_channel (name) or use create_channel (name) (categoryId)
   let match = /^\s*use\s+create_channel\s*\(([\s\S]*?)\)\s*(?:\(([\s\S]*?)\))?\s*$/i.exec(text);
   if (match) {
