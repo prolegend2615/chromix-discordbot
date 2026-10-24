@@ -26,11 +26,63 @@ export type WebSearchCommand = {
   query: string;
 };
 
+/** Read a complete AI action at the end of a response, allowing prose before it
+ * and the redundant closing parenthesis some providers add around the command. */
+function readAction(text: string, name: string, argumentCount: number): string[] | null {
+  const pattern = new RegExp(`\\buse\\s+${name}\\b`, "i");
+  const match = pattern.exec(text);
+  if (!match) return null;
+  let cursor = match.index + match[0].length;
+  const args: string[] = [];
+
+  for (let index = 0; index < argumentCount; index += 1) {
+    while (/\s/.test(text[cursor] ?? "")) cursor += 1;
+    if (text[cursor] !== "(") return null;
+    cursor += 1;
+    const start = cursor;
+    let depth = 1;
+    while (cursor < text.length && depth > 0) {
+      if (text[cursor] === "(") depth += 1;
+      else if (text[cursor] === ")") depth -= 1;
+      cursor += 1;
+    }
+    if (depth !== 0) return null;
+    args.push(text.slice(start, cursor - 1));
+  }
+
+  const trailing = text.slice(cursor).trim();
+  // Permit an enclosing pair, Markdown wrappers, and terminal punctuation.
+  if (trailing && !/^[)`*_~\s.!?]*$/.test(trailing)) return null;
+  // Don't recognize a command quoted as an example or discussion.
+  const preceding = text.slice(0, match.index).trimEnd();
+  if (/(?:["'`]|\b(?:example|format|syntax|command)\s*:)\s*$/i.test(preceding)) return null;
+  return args;
+}
+
+function readNoArgAction(text: string, name: string): boolean {
+  const match = new RegExp(`\\buse\\s+${name}\\b`, "i").exec(text);
+  if (!match) return false;
+  const trailing = text.slice(match.index + match[0].length).trim();
+  if (trailing && !/^[)`*_~\s.!?]*$/.test(trailing)) return false;
+  const preceding = text.slice(0, match.index).trimEnd();
+  return !/(?:["'`]|\b(?:example|format|syntax|command)\s*:)\s*$/i.test(preceding);
+}
+
+export function readToolActionArguments(text: string, name: string, argumentCount: number): string[] | null {
+  return readAction(text, name, argumentCount);
+}
+
+export function hasToolAction(text: string): boolean {
+  return /\buse\s+(?:set_afk|set_reminder|sam_speak|show_avatar|generate_image|create_poll|set_timer|schedule_message|create_channel|create_category|delete_channel|delete_category|view_channels|rock_paper_scissors|tic_tac_toe|search_(?:brave|exa))\b/i.test(text);
+}
+
 /** Parses one complete, provider-specific web search action from the AI. */
 export function parseWebSearchCommand(text: string): WebSearchCommand | null {
-  const match = /^\s*use\s+search_(brave|exa)\s*\(([\s\S]*)\)\s*$/i.exec(text);
+  const match = /\buse\s+search_(brave|exa)\b/i.exec(text);
   if (!match) return null;
-  const query = match[2].trim().replace(/\s+/g, " ");
+  const args = readAction(text, `search_${match[1]}`, 1);
+  if (!args) return null;
+  const query = args[0].trim().replace(/\s+/g, " ");
   if (!query || query.length > 500) return null;
   return { provider: match[1].toLowerCase() as WebSearchProvider, query };
 }
@@ -51,9 +103,10 @@ export type SetAfkCommand = {
 };
 
 export function parseSetAfkCommand(text: string): SetAfkCommand | null {
-  const match = /^\s*use\s+set_afk\s*(?:\(([\s\S]*)\))?\s*$/i.exec(text);
-  if (!match) return null;
-  return { reason: match[1]?.trim() || "None" };
+  const args = readAction(text, "set_afk", 1);
+  if (args) return { reason: args[0].trim() || "None" };
+  if (readNoArgAction(text, "set_afk")) return { reason: "None" };
+  return null;
 }
 
 export type SetReminderCommand = {
@@ -62,10 +115,10 @@ export type SetReminderCommand = {
 };
 
 export function parseSetReminderCommand(text: string): SetReminderCommand | null {
-  const match = /^\s*use\s+set_reminder\s*\(([^)]*)\)\s*\(([\s\S]*)\)\s*$/i.exec(text);
-  if (!match) return null;
-  const duration = match[1].trim();
-  const message = match[2].trim();
+  const args = readAction(text, "set_reminder", 2);
+  if (!args) return null;
+  const duration = args[0].trim();
+  const message = args[1].trim();
   if (!duration || !message) return null;
   return { duration, message };
 }
@@ -73,11 +126,11 @@ export function parseSetReminderCommand(text: string): SetReminderCommand | null
 export type CreatePollCommand = { when: string; question: string; options: string[] };
 export function hasPollIntent(text: string) { return /\b(?:poll|survey)\b|\b(?:create|make|start|schedule)\b.{0,40}\bvot(?:e|ing)\b/i.test(text); }
 export function parseCreatePollCommand(text: string): CreatePollCommand | null {
-  const match = /^\s*use\s+create_poll\s*\(([^)]*)\)\s*\(([^)]*)\)\s*\(([\s\S]*)\)\s*$/i.exec(text);
-  if (!match) return null;
-  const when = match[1].trim().toLowerCase();
-  const question = match[2].trim();
-  const options = match[3].split("|").map(option => option.trim()).filter(Boolean);
+  const args = readAction(text, "create_poll", 3);
+  if (!args) return null;
+  const when = args[0].trim().toLowerCase();
+  const question = args[1].trim();
+  const options = args[2].split("|").map(option => option.trim()).filter(Boolean);
   if (!question || options.length < 2 || options.length > 10) return null;
   return { when, question, options };
 }
@@ -85,9 +138,9 @@ export function parseCreatePollCommand(text: string): CreatePollCommand | null {
 export type SetTimerCommand = { duration: string; label: string };
 export function hasTimerIntent(text: string) { return /\b(?:timer|countdown)\b/i.test(text); }
 export function parseSetTimerCommand(text: string): SetTimerCommand | null {
-  const match = /^\s*use\s+set_timer\s*\(([^)]*)\)\s*\(([^)]*)\)\s*$/i.exec(text);
-  if (!match || !match[1].trim() || !match[2].trim()) return null;
-  return { duration: match[1].trim(), label: match[2].trim() };
+  const args = readAction(text, "set_timer", 2);
+  if (!args || !args[0].trim() || !args[1].trim()) return null;
+  return { duration: args[0].trim(), label: args[1].trim() };
 }
 
 export type ScheduleMessageCommand = { duration: string; message: string };
@@ -96,9 +149,9 @@ export function hasScheduleMessageIntent(text: string) {
     && /\b(?:schedule|scheduled|tomorrow|later|today|at|in)\b/i.test(text);
 }
 export function parseScheduleMessageCommand(text: string): ScheduleMessageCommand | null {
-  const match = /^\s*use\s+schedule_message\s*\(([^)]*)\)\s*\(([\s\S]*)\)\s*$/i.exec(text);
-  if (!match || !match[1].trim() || !match[2].trim()) return null;
-  return { duration: match[1].trim(), message: match[2].trim() };
+  const args = readAction(text, "schedule_message", 2);
+  if (!args || !args[0].trim() || !args[1].trim()) return null;
+  return { duration: args[0].trim(), message: args[1].trim() };
 }
 
 export const MAX_REMINDER_SECONDS = 12 * 60 * 60;
@@ -149,9 +202,9 @@ export function hasTtsIntent(text: string): boolean {
 }
 
 export function parseSamSpeakCommand(text: string): SamSpeakCommand | null {
-  const match = /^\s*use\s+sam_speak\s*\(([\s\S]*)\)\s*$/i.exec(text);
-  if (!match) return null;
-  const spokenText = match[1]?.trim();
+  const args = readAction(text, "sam_speak", 1);
+  if (!args) return null;
+  const spokenText = args[0].trim();
   if (!spokenText) return null;
   return { text: spokenText };
 }
@@ -180,9 +233,9 @@ export function extractMentionId(text: string): string | null {
  * for the requester's own avatar. Defaults to "me" when empty.
  */
 export function parseShowAvatarCommand(text: string): ShowAvatarCommand | null {
-  const match = /^\s*use\s+show_avatar\s*(?:\(([\s\S]*)\))?\s*$/i.exec(text);
-  if (!match) return null;
-  const raw = match[1]?.trim() || "";
+  const args = readAction(text, "show_avatar", 1);
+  const raw = args?.[0].trim() || "";
+  if (!args && !readNoArgAction(text, "show_avatar")) return null;
   const target = raw || "me";
   return { target };
 }
@@ -206,9 +259,9 @@ export function hasImageGenerationIntent(text: string): boolean {
 
 /** Parses the AI action format used to request one generated image. */
 export function parseGenerateImageCommand(text: string): GenerateImageCommand | null {
-  const match = /^\s*use\s+generate_image\s*\(([\s\S]*)\)\s*$/i.exec(text);
-  if (!match) return null;
-  const prompt = match[1]?.trim().replace(/\s+/g, " ");
+  const args = readAction(text, "generate_image", 1);
+  if (!args) return null;
+  const prompt = args[0].trim().replace(/\s+/g, " ");
   if (!prompt) return null;
   return { prompt: prompt.slice(0, 1200) };
 }
@@ -254,7 +307,7 @@ export function hasRockPaperScissorsIntent(text: string): boolean {
 
 /** Parses the AI action used to open a button-based game. */
 export function parseRockPaperScissorsCommand(text: string): { action: "start" } | null {
-  return /^\s*use\s+rock_paper_scissors\s*$/i.test(text) ? { action: "start" } : null;
+  return readNoArgAction(text, "rock_paper_scissors") ? { action: "start" } : null;
 }
 
 export function getRockPaperScissorsWinner(
@@ -284,7 +337,7 @@ export function hasTicTacToeIntent(text: string): boolean {
 
 /** Parses the AI action used to open a button-based game. */
 export function parseTicTacToeCommand(text: string): { action: "start" } | null {
-  return /^\s*use\s+tic_tac_toe\s*$/i.test(text) ? { action: "start" } : null;
+  return readNoArgAction(text, "tic_tac_toe") ? { action: "start" } : null;
 }
 
 const TIC_TAC_TOE_LINES: readonly (readonly [number, number, number])[] = [

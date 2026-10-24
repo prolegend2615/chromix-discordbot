@@ -1,4 +1,5 @@
 import { ChannelType, type Guild } from "discord.js";
+import { readToolActionArguments } from "../logic.js";
 
 export type ChannelManagementCommand =
   | { action: "create_channel"; name: string; categoryId?: string }
@@ -115,36 +116,37 @@ export function hasChannelManagementIntent(text: string): boolean {
 }
 
 export function parseChannelManagementCommand(text: string): ChannelManagementCommand | null {
-  const createChannelMatch = /^\s*use\s+create_channel\s*\(([\s\S]*?)\)\s*(?:\(([\s\S]*?)\))?\s*$/i.exec(text);
-  if (createChannelMatch) {
-    const name = sanitizeDiscordName(createChannelMatch[1]);
-    const categoryId = createChannelMatch[2]?.trim();
+  let args = readToolActionArguments(text, "create_channel", 2);
+  if (!args) args = readToolActionArguments(text, "create_channel", 1);
+  if (args) {
+    const name = sanitizeDiscordName(args[0]);
+    const categoryId = args[1]?.trim();
     if (!name) return null;
     return { action: "create_channel", name, categoryId: categoryId || undefined };
   }
 
-  const createCategoryMatch = /^\s*use\s+create_category\s*\(([\s\S]*?)\)\s*$/i.exec(text);
-  if (createCategoryMatch) {
-    const name = sanitizeDiscordName(createCategoryMatch[1]);
+  args = readToolActionArguments(text, "create_category", 1);
+  if (args) {
+    const name = sanitizeDiscordName(args[0]);
     if (!name) return null;
     return { action: "create_category", name };
   }
 
-  const deleteChannelMatch = /^\s*use\s+delete_channel\s*\(([\s\S]*?)\)\s*$/i.exec(text);
-  if (deleteChannelMatch) {
-    const channelId = deleteChannelMatch[1].trim();
+  args = readToolActionArguments(text, "delete_channel", 1);
+  if (args) {
+    const channelId = args[0].trim();
     if (!channelId) return null;
     return { action: "delete_channel", channelId };
   }
 
-  const deleteCategoryMatch = /^\s*use\s+delete_category\s*\(([\s\S]*?)\)\s*$/i.exec(text);
-  if (deleteCategoryMatch) {
-    const categoryId = deleteCategoryMatch[1].trim();
+  args = readToolActionArguments(text, "delete_category", 1);
+  if (args) {
+    const categoryId = args[0].trim();
     if (!categoryId) return null;
     return { action: "delete_category", categoryId };
   }
 
-  if (/^\s*use\s+view_channels\s*$/i.test(text)) {
+  if (readToolActionArguments(text, "view_channels", 0)) {
     return { action: "view_channels" };
   }
 

@@ -26,6 +26,7 @@ import {
   parseSetTimerCommand,
   parseShowAvatarCommand,
   parseTicTacToeCommand,
+  hasToolAction,
 } from "../logic.js";
 import { createReminder } from "./reminders.js";
 import { reserveVoiceMessage, type VoiceReservation } from "./tts.js";
@@ -69,13 +70,6 @@ function splitDiscordMessage(content: string, limit = DISCORD_MESSAGE_LIMIT): st
   return chunks;
 }
 
-const ACTION_PREFIXES = [
-  "use set_afk (", "use set_reminder (", "use sam_speak (", "use show_avatar (",
-  "use generate_image (", "use create_poll (", "use set_timer (", "use schedule_message (",
-  "use create_channel", "use create_category", "use delete_channel", "use delete_category",
-  "use rock_paper_scissors", "use tic_tac_toe", "use search_",
-];
-
 function createStreamingEditor(editFirst: (content: string) => Promise<unknown>, sendNext: (content: string) => Promise<Message>) {
   let draft = "";
   const published: string[] = [];
@@ -84,11 +78,7 @@ function createStreamingEditor(editFirst: (content: string) => Promise<unknown>,
   let bufferedCharacters = 0;
   let editError: unknown;
   let pending = Promise.resolve();
-
-  const isActionOutput = (text: string) => {
-    const normalized = text.trimStart().toLowerCase();
-    return ACTION_PREFIXES.some(prefix => normalized.startsWith(prefix) || prefix.startsWith(normalized));
-  };
+  let actionDetected = false;
 
   const enqueueReconcile = (final = false) => {
     const chunks = splitDiscordMessage(draft, 1900);
@@ -117,7 +107,11 @@ function createStreamingEditor(editFirst: (content: string) => Promise<unknown>,
     push(text: string) {
       draft += text;
       bufferedCharacters += text.length;
-      if (isActionOutput(draft)) return;
+      if (hasToolAction(draft)) {
+        actionDetected = true;
+        return;
+      }
+      if (actionDetected) return;
       const chunks = splitDiscordMessage(draft, 1900);
       const messageBoundaryReached = chunks.length > 1 && chunks.length > Math.max(1, published.length);
       if (draft.trim() && (messageBoundaryReached || (bufferedCharacters >= 60 && Date.now() - lastEditAt >= 900))) {
@@ -128,7 +122,7 @@ function createStreamingEditor(editFirst: (content: string) => Promise<unknown>,
     },
     async finish(finalText = draft) {
       draft = finalText;
-      if (!isActionOutput(draft) && draft.trim()) enqueueReconcile(true);
+      if (!hasToolAction(draft) && draft.trim()) enqueueReconcile(true);
       await pending;
       if (editError) throw editError;
     },
@@ -138,6 +132,7 @@ function createStreamingEditor(editFirst: (content: string) => Promise<unknown>,
       extraMessages.length = 0;
       published.length = 0;
       draft = "";
+      actionDetected = false;
       editError = undefined;
       bufferedCharacters = 0;
       lastEditAt = Date.now();
@@ -309,7 +304,7 @@ export async function runChat(args: {
     const samSpeakCommand = args.adminChat ? null : parseSamSpeakCommand(answer);
 
     const channelManagementCommand = args.adminChat ? parseChannelManagementCommand(answer) : null;
-    const hasToolAction = Boolean(
+    const parsedToolAction = Boolean(
       afkCommand
       || reminderCommand
       || pollCommand
@@ -322,8 +317,23 @@ export async function runChat(args: {
       || samSpeakCommand
       || channelManagementCommand,
     );
-    if (webSearch.results.length && !hasToolAction) {
+    if (webSearch.results.length && !parsedToolAction) {
       answer = `${answer}${formatWebSearchSources(webSearch.results)}`;
+    }
+
+    if (hasToolAction(answer)) {
+      const actionStatus = imageCommand ? "🎨 Creating your image…"
+        : pollCommand ? (pollCommand.when === "now" ? "📊 Creating your poll…" : "📊 Scheduling your poll…")
+          : timerCommand ? "⏱️ Setting your timer…"
+            : scheduledMessageCommand ? "🗓️ Scheduling your message…"
+              : reminderCommand ? "⏰ Setting your reminder…"
+                : afkCommand ? "Setting your AFK status…"
+                  : avatarCommand ? "Fetching that avatar…"
+                    : samSpeakCommand ? "🔊 Generating your voice message…"
+                      : rockPaperScissorsCommand || ticTacToeCommand ? "Starting your game…"
+                        : channelManagementCommand ? "Updating the server…"
+                          : "I couldn't use that tool request. Please try again.";
+      await streamingEditor.reset(actionStatus).catch(() => undefined);
     }
 
     let actionResponseHandled = false;
