@@ -1,4 +1,4 @@
-import { PermissionsBitField, type Message, type User, type GuildMember, type TextBasedChannel } from "discord.js";
+import { ChannelType, PermissionsBitField, type Message, type MessageCreateOptions, type User, type GuildMember, type TextBasedChannel } from "discord.js";
 import { getSettings } from "./settings.js";
 import { addHistory, getHistory } from "./history.js";
 import { checkPromptLimit, isChannelAllowed } from "./access.js";
@@ -8,16 +8,22 @@ import { clearAfkStatus, getAfkStatus, normalizeAfkReason, setAfkStatus, type Af
 import {
   formatReminderDuration,
   hasImageGenerationIntent,
+  hasPollIntent,
+  hasScheduleMessageIntent,
   hasReminderIntent,
   hasRockPaperScissorsIntent,
   hasTicTacToeIntent,
   hasTtsIntent,
+  hasTimerIntent,
   parseGenerateImageCommand,
+  parseCreatePollCommand,
+  parseScheduleMessageCommand,
   parseReminderDuration,
   parseRockPaperScissorsCommand,
   parseSamSpeakCommand,
   parseSetAfkCommand,
   parseSetReminderCommand,
+  parseSetTimerCommand,
   parseShowAvatarCommand,
   parseTicTacToeCommand,
 } from "../logic.js";
@@ -30,12 +36,15 @@ import {
 } from "./channel-management.js";
 import { config } from "../config.js";
 import { runWebSearchAgent, searchWeb, formatWebSearchSources } from "./web-search.js";
+import { createPoll, buildPollPayload, getPoll, publishPoll } from "./polls.js";
+import { createScheduledPost, createTimer, parseScheduleDuration } from "./scheduled-actions.js";
 
 const activePrompts = new Set<string>();
+const serverFactsCache = new Map<string, { expiresAt: number; facts: string }>();
 const DISCORD_MESSAGE_LIMIT = 2000;
 
 type SendableTextChannel = TextBasedChannel & {
-  send: (content: string) => Promise<Message>;
+  send: (content: string | MessageCreateOptions) => Promise<Message>;
 };
 
 function isSendableTextChannel(channel: TextBasedChannel): channel is SendableTextChannel {
@@ -60,10 +69,90 @@ function splitDiscordMessage(content: string): string[] {
   return chunks;
 }
 
+const ACTION_PREFIXES = [
+  "use set_afk (", "use set_reminder (", "use sam_speak (", "use show_avatar (",
+  "use generate_image (", "use create_poll (", "use set_timer (", "use schedule_message (",
+  "use create_channel", "use create_category", "use delete_channel", "use delete_category",
+  "use rock_paper_scissors", "use tic_tac_toe", "use search_",
+];
+
+function createStreamingEditor(edit: (content: string) => Promise<unknown>) {
+  let draft = "";
+  let published = "";
+  let lastEditAt = 0;
+  let pending = Promise.resolve();
+
+  const isActionOutput = (text: string) => {
+    const normalized = text.trimStart().toLowerCase();
+    return ACTION_PREFIXES.some(prefix => normalized.startsWith(prefix) || prefix.startsWith(normalized));
+  };
+
+  const enqueueEdit = (content: string) => {
+    if (content === published) return;
+    published = content;
+    lastEditAt = Date.now();
+    pending = pending.then(() => edit(content)).then(() => undefined).catch(() => undefined);
+  };
+
+  const visibleDraft = () => draft.length <= 1900 ? draft : `${draft.slice(0, 1897)}…`;
+
+  return {
+    push(text: string) {
+      draft += text;
+      if (isActionOutput(draft)) return;
+      const visible = visibleDraft();
+      const added = visible.length - published.length;
+      if (visible.trim() && added >= 35 && Date.now() - lastEditAt >= 900) {
+        enqueueEdit(visible);
+      }
+    },
+    async finish() {
+      if (!isActionOutput(draft) && draft.trim()) enqueueEdit(visibleDraft());
+      await pending;
+    },
+    async reset(status = "Retrying with another AI provider…") {
+      await pending;
+      draft = "";
+      published = "";
+      enqueueEdit(status);
+      await pending;
+      published = "";
+      lastEditAt = 0;
+    },
+  };
+}
+
 function getThreadChannelId(channel: TextBasedChannel): string | undefined {
   if (!("threadId" in channel)) return undefined;
   const threadId = channel.threadId;
   return typeof threadId === "string" ? threadId : undefined;
+}
+
+async function getServerFacts(channel: TextBasedChannel): Promise<string> {
+  if (!("guild" in channel) || !channel.guild) return "";
+  const guild = channel.guild;
+  const cached = serverFactsCache.get(guild.id);
+  if (cached && cached.expiresAt > Date.now()) return cached.facts;
+  let ownerName = "Unavailable";
+  try {
+    const owner = guild.members.cache.get(guild.ownerId) ?? await guild.fetchOwner();
+    ownerName = owner.user.globalName ?? owner.user.username;
+  } catch { /* Server facts should not block an otherwise useful answer. */ }
+  const channels = guild.channels.cache;
+  const roles = guild.roles.cache.filter(role => role.id !== guild.id).sort((a, b) => b.position - a.position);
+  const highestRole = roles.first()?.name ?? "None";
+  const channelCount = channels.size;
+  const textChannelCount = channels.filter(item => item?.type === ChannelType.GuildText || item?.type === ChannelType.GuildAnnouncement).size;
+  const voiceChannelCount = channels.filter(item => item?.type === ChannelType.GuildVoice || item?.type === ChannelType.GuildStageVoice).size;
+  const categoryCount = channels.filter(item => item?.type === ChannelType.GuildCategory).size;
+  const facts = [
+    `Server owner: ${ownerName}`,
+    `Member count: ${guild.memberCount}`,
+    `Highest role: ${highestRole}`,
+    `Channel count: ${channelCount} total including ${categoryCount} categories (${textChannelCount} text/announcement, ${voiceChannelCount} voice/stage).`,
+  ].join("\n");
+  serverFactsCache.set(guild.id, { expiresAt: Date.now() + 15 * 60_000, facts });
+  return facts;
 }
 
 export async function runChat(args: {
@@ -115,6 +204,7 @@ export async function runChat(args: {
     if ("sendTyping" in args.channel) await args.channel.sendTyping();
     const placeholder = await args.reply("Thinking…");
     const editResponse = args.edit ?? (content => placeholder.edit(content));
+    const streamingEditor = createStreamingEditor(editResponse);
 
     if (!args.adminChat && hasTtsIntent(prompt)) {
       voiceReservation = reserveVoiceMessage({ channel: args.channel, channelId: args.channelId });
@@ -130,6 +220,7 @@ export async function runChat(args: {
 
     const userName = args.user.globalName ?? args.user.username;
     const serverNickname = args.member?.nickname ?? "None";
+    const serverFacts = await getServerFacts(args.channel);
     const startedAt = Date.now();
     const webSearch = await runWebSearchAgent({
       enabled: !args.adminChat,
@@ -140,11 +231,16 @@ export async function runChat(args: {
           userName,
           serverNickname,
           guildName: args.guildName ?? "Direct Message",
+          serverFacts,
           settings,
           history,
           messageTimestamp: args.messageTimestamp ?? Date.now(),
           adminChatActionEnabled: args.adminChat,
-          reminderActionEnabled: !args.adminChat && hasReminderIntent(prompt),
+          reminderActionEnabled: !args.adminChat && hasReminderIntent(prompt)
+            && !hasScheduleMessageIntent(prompt) && !hasPollIntent(prompt) && !hasTimerIntent(prompt),
+          pollActionEnabled: !args.adminChat && Boolean(args.guildId) && hasPollIntent(prompt),
+          timerActionEnabled: !args.adminChat && hasTimerIntent(prompt),
+          scheduledMessageActionEnabled: !args.adminChat && Boolean(args.guildId) && hasScheduleMessageIntent(prompt),
           ttsActionEnabled: !args.adminChat && hasTtsIntent(prompt),
           imageGenerationActionEnabled: !args.adminChat && hasImageGenerationIntent(prompt),
           rockPaperScissorsActionEnabled: !args.adminChat && hasRockPaperScissorsIntent(prompt),
@@ -152,19 +248,30 @@ export async function runChat(args: {
           webSearchActionEnabled: context.availableProviders.length > 0,
           webSearchAvailableProviders: context.availableProviders,
           webSearchFeedback: context.feedback,
-          onDelta: text => { response += text; },
+          onDelta: text => {
+            response += text;
+            streamingEditor.push(text);
+          },
+          onProviderRetry: async remainingAttempts => {
+            response = "";
+            await streamingEditor.reset(remainingAttempts > 0 ? "Retrying with another AI provider…" : "The AI provider failed.");
+          },
         });
         return response;
       },
       search: (provider, query) => searchWeb(provider, query, {
         apiKey: provider === "brave" ? config.braveSearchApiKey : config.exaApiKey,
       }),
-      onSearchStart: () => editResponse("Searching the web…"),
+      onSearchStart: () => streamingEditor.reset("Searching the web…"),
     });
+    await streamingEditor.finish();
     let answer = webSearch.answer;
 
     const afkCommand = args.adminChat ? null : parseSetAfkCommand(answer);
     const reminderCommand = args.adminChat ? null : parseSetReminderCommand(answer);
+    const pollCommand = args.adminChat ? null : parseCreatePollCommand(answer);
+    const timerCommand = args.adminChat ? null : parseSetTimerCommand(answer);
+    const scheduledMessageCommand = args.adminChat ? null : parseScheduleMessageCommand(answer);
     const avatarCommand = args.adminChat ? null : parseShowAvatarCommand(answer);
     const imageCommand = args.adminChat ? null : parseGenerateImageCommand(answer);
     const rockPaperScissorsCommand = !args.adminChat && hasRockPaperScissorsIntent(prompt)
@@ -177,6 +284,9 @@ export async function runChat(args: {
     const hasToolAction = Boolean(
       afkCommand
       || reminderCommand
+      || pollCommand
+      || timerCommand
+      || scheduledMessageCommand
       || avatarCommand
       || imageCommand
       || rockPaperScissorsCommand
@@ -231,6 +341,63 @@ export async function runChat(args: {
           actionResponseHandled = true;
         }
       }
+    }
+
+    if (pollCommand) {
+      if (!args.guildId || !isSendableTextChannel(args.channel)) {
+        answer = "Polls can only be created in a server text channel.";
+      } else {
+        const delaySeconds = pollCommand.when === "now" ? 0 : parseScheduleDuration(pollCommand.when);
+        if (delaySeconds === null) {
+          answer = "I couldn't schedule that poll. Use a delay up to 30 days, such as 2h or 1d.";
+        } else {
+          const pollId = await createPoll({
+            guildId: args.guildId,
+            channelId: args.channelId,
+            creatorId: args.user.id,
+            question: pollCommand.question,
+            options: pollCommand.options,
+            scheduledAt: Date.now() + delaySeconds * 1000,
+          });
+          if (delaySeconds === 0) {
+            const poll = await getPoll(pollId);
+            if (!poll) throw new Error("I couldn't load the poll I just created.");
+            const message = await args.channel.send(await buildPollPayload(poll));
+            await publishPoll(pollId, message.id);
+            answer = "Poll posted.";
+          } else {
+            answer = `Poll scheduled for <t:${Math.floor((Date.now() + delaySeconds * 1000) / 1000)}:F> (<t:${Math.floor((Date.now() + delaySeconds * 1000) / 1000)}:R>).`;
+          }
+        }
+      }
+      await editResponse(answer).catch(() => undefined);
+      actionResponseHandled = true;
+    }
+
+    if (timerCommand) {
+      const seconds = parseScheduleDuration(timerCommand.duration);
+      if (seconds === null) {
+        answer = "Timers need a positive duration up to 30 days, such as 10m or 2h.";
+      } else {
+        const dueAt = Date.now() + seconds * 1000;
+        await createTimer({ channelId: args.channelId, creatorId: args.user.id, label: timerCommand.label, dueAt });
+        answer = `Timer set for **${timerCommand.label}** — <t:${Math.floor(dueAt / 1000)}:R> (ends <t:${Math.floor(dueAt / 1000)}:t>).`;
+      }
+      await editResponse(answer).catch(() => undefined);
+      actionResponseHandled = true;
+    }
+
+    if (scheduledMessageCommand) {
+      const seconds = parseScheduleDuration(scheduledMessageCommand.duration);
+      if (!args.guildId || seconds === null) {
+        answer = !args.guildId ? "Scheduled messages can only be posted in a server channel." : "Schedule messages up to 30 days ahead, such as 2h or 1d.";
+      } else {
+        const scheduledAt = Date.now() + seconds * 1000;
+        const id = await createScheduledPost({ guildId: args.guildId, channelId: args.channelId, creatorId: args.user.id, content: scheduledMessageCommand.message, scheduledAt });
+        answer = `Message scheduled for <t:${Math.floor(scheduledAt / 1000)}:F> (<t:${Math.floor(scheduledAt / 1000)}:R>). Scheduled message #${id}.`;
+      }
+      await editResponse(answer).catch(() => undefined);
+      actionResponseHandled = true;
     }
 
     if (samSpeakCommand) {

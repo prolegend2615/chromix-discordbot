@@ -1,7 +1,7 @@
 import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, Events, GatewayIntentBits, ModalBuilder,
   PermissionsBitField, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder,
-  type ButtonInteraction, type ChatInputCommandInteraction, type Message, type StringSelectMenuInteraction, type User,
+  type ButtonInteraction, type ChatInputCommandInteraction, type Message, type MessageCreateOptions, type StringSelectMenuInteraction, type User,
 } from "discord.js";
 import { config } from "./config.js";
 import { runChat } from "./services/chat.js";
@@ -14,11 +14,58 @@ import { extractMentionId, formatReminderDuration, isTransientNetworkError, MODE
 import { deleteReminder, getDueReminders } from "./services/reminders.js";
 import { handleRockPaperScissorsButton, startRockPaperScissorsGame } from "./services/rock-paper-scissors.js";
 import { handleTicTacToeButton, startTicTacToeGame } from "./services/tic-tac-toe.js";
+import { buildPollPayload, getDuePolls, getPoll, publishPoll, votePoll } from "./services/polls.js";
+import { deleteTimer, getDueScheduledPosts, getDueTimers, markScheduledPostSent } from "./services/scheduled-actions.js";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
 const prefix = "c.";
 const VIP_ADMIN_ID = "1347611715826876496";
 let reminderSweepInProgress = false;
+let scheduledActionSweepInProgress = false;
+
+async function sendChannelMessage(channelId: string, payload: string | MessageCreateOptions) {
+  const channel = await client.channels.fetch(channelId);
+  if (!channel || !("send" in channel) || typeof channel.send !== "function") throw new Error("Channel is unavailable or cannot receive messages.");
+  return (channel.send as (value: string | MessageCreateOptions) => Promise<Message>).call(channel, payload);
+}
+
+async function deliverDueScheduledActions() {
+  if (scheduledActionSweepInProgress) return;
+  scheduledActionSweepInProgress = true;
+  try {
+    for (const poll of await getDuePolls()) {
+      try {
+        const message = await sendChannelMessage(poll.channel_id, await buildPollPayload(poll));
+        await publishPoll(poll.id, message.id);
+      } catch (error) {
+        console.error(`Scheduled poll ${poll.id} could not be posted; it will be retried.`, error);
+      }
+    }
+    for (const post of await getDueScheduledPosts()) {
+      try {
+        await sendChannelMessage(post.channel_id, { content: post.content, allowedMentions: { parse: [] } });
+        await markScheduledPostSent(post.id);
+      } catch (error) {
+        console.error(`Scheduled message ${post.id} could not be posted; it will be retried.`, error);
+      }
+    }
+    for (const timer of await getDueTimers()) {
+      try {
+        await sendChannelMessage(timer.channel_id, {
+          content: `⏰ Timer finished: **${timer.label}** (set to end at <t:${Math.floor(timer.due_at / 1000)}:t>).`,
+          allowedMentions: { parse: [] },
+        });
+        await deleteTimer(timer.id);
+      } catch (error) {
+        console.error(`Timer ${timer.id} could not be delivered; it will be retried.`, error);
+      }
+    }
+  } catch (error) {
+    console.error("Scheduled action sweep failed.", error);
+  } finally {
+    scheduledActionSweepInProgress = false;
+  }
+}
 
 async function deliverDueReminders() {
   if (reminderSweepInProgress) return;
@@ -54,6 +101,21 @@ async function deliverDueReminders() {
 function startReminderScheduler() {
   void deliverDueReminders();
   setInterval(() => void deliverDueReminders(), 15_000);
+  void deliverDueScheduledActions();
+  setInterval(() => void deliverDueScheduledActions(), 15_000);
+}
+
+async function handlePollVote(interaction: StringSelectMenuInteraction) {
+  if (await isUserBlacklisted(interaction.user.id)) {
+    await interaction.reply({ content: "You are blacklisted and cannot use bot commands.", ephemeral: true });
+    return;
+  }
+  const [, , rawId] = interaction.customId.split(":");
+  const pollId = Number(rawId);
+  const optionIndex = Number(interaction.values[0]);
+  if (!Number.isSafeInteger(pollId) || pollId <= 0) throw new Error("That poll could not be found.");
+  const poll = await votePoll(pollId, interaction.user.id, optionIndex);
+  await interaction.update(await buildPollPayload(poll));
 }
 
 function isAdmin(member: { permissions: PermissionsBitField } | null) {
@@ -156,7 +218,7 @@ async function handlePersonaCommand(context: CommandContext) {
 async function handleDeleteMyDataCommand(context: CommandContext) {
   await deleteUserDataExceptVip(context.userId);
   await context.reply({
-    content: "Your saved conversations, prompt records, response metrics, quota violations, and personal settings were deleted. Your VIP status was kept.",
+    content: "Your saved conversations, prompts, reminders, timers, polls, scheduled messages, response metrics, quota violations, and personal settings were deleted. Your VIP status was kept.",
     ephemeral: context.ephemeral,
     allowedMentions: { repliedUser: false },
   });
@@ -306,6 +368,9 @@ function helpEmbed() {
       { name: "Limits", value: "8 prompts per minute, with a 5-second cooldown. VIP users receive 12 history messages; others receive 5." },
       { name: "Image generation", value: "Ask me to create an image in a server chat. Each server can generate 3 images every 15 minutes and 50 per UTC day. Image generation is unavailable in DMs." },
       { name: "Games", value: "Ask me to play Rock, Paper, Scissors or Tic-Tac-Toe. In Tic-Tac-Toe, you are X and Chromix is O; choose a square to make a move." },
+      { name: "Polls and timers", value: "Ask me to create a poll now or later, or start a countdown timer. Timers show a live Discord relative timestamp and post a notice when they finish." },
+      { name: "Scheduled messages", value: "Ask me to write and schedule a message in this channel, up to 30 days ahead. Scheduled posts do not trigger role or everyone mentions." },
+      { name: "Server details", value: "Ask about member and channel counts, the highest role, or the server owner. I use Discord's cached server data; counts can lag until Discord updates the bot." },
       { name: "Server admins", value: "`/listen` and `/ignore` control which channels allow the bot." },
     );
 }
@@ -633,7 +698,10 @@ client.on(Events.InteractionCreate, async interaction => {
         });
       }
     }
-    if (interaction.isStringSelectMenu()) await handleSettingSelect(interaction);
+    if (interaction.isStringSelectMenu()) {
+      if (interaction.customId.startsWith("poll:vote:")) await handlePollVote(interaction);
+      else await handleSettingSelect(interaction);
+    }
     if (interaction.isButton()) {
       if (interaction.customId.startsWith("rps:") || interaction.customId.startsWith("ttt:")) {
         if (await isUserBlacklisted(interaction.user.id)) {

@@ -70,6 +70,37 @@ export function parseSetReminderCommand(text: string): SetReminderCommand | null
   return { duration, message };
 }
 
+export type CreatePollCommand = { when: string; question: string; options: string[] };
+export function hasPollIntent(text: string) { return /\b(?:poll|survey)\b|\b(?:create|make|start|schedule)\b.{0,40}\bvot(?:e|ing)\b/i.test(text); }
+export function parseCreatePollCommand(text: string): CreatePollCommand | null {
+  const match = /^\s*use\s+create_poll\s*\(([^)]*)\)\s*\(([^)]*)\)\s*\(([\s\S]*)\)\s*$/i.exec(text);
+  if (!match) return null;
+  const when = match[1].trim().toLowerCase();
+  const question = match[2].trim();
+  const options = match[3].split("|").map(option => option.trim()).filter(Boolean);
+  if (!question || options.length < 2 || options.length > 10) return null;
+  return { when, question, options };
+}
+
+export type SetTimerCommand = { duration: string; label: string };
+export function hasTimerIntent(text: string) { return /\b(?:timer|countdown)\b/i.test(text); }
+export function parseSetTimerCommand(text: string): SetTimerCommand | null {
+  const match = /^\s*use\s+set_timer\s*\(([^)]*)\)\s*\(([^)]*)\)\s*$/i.exec(text);
+  if (!match || !match[1].trim() || !match[2].trim()) return null;
+  return { duration: match[1].trim(), label: match[2].trim() };
+}
+
+export type ScheduleMessageCommand = { duration: string; message: string };
+export function hasScheduleMessageIntent(text: string) {
+  return /\b(?:message|announcement|post)\b/i.test(text)
+    && /\b(?:schedule|scheduled|tomorrow|later|today|at|in)\b/i.test(text);
+}
+export function parseScheduleMessageCommand(text: string): ScheduleMessageCommand | null {
+  const match = /^\s*use\s+schedule_message\s*\(([^)]*)\)\s*\(([\s\S]*)\)\s*$/i.exec(text);
+  if (!match || !match[1].trim() || !match[2].trim()) return null;
+  return { duration: match[1].trim(), message: match[2].trim() };
+}
+
 export const MAX_REMINDER_SECONDS = 12 * 60 * 60;
 
 export function parseReminderDuration(value: string): number | null {

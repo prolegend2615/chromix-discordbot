@@ -6,7 +6,7 @@ export type ChatMessage = {
 export type ProviderAttempt = {
   provider: string;
   model: string;
-  generate: () => Promise<string>;
+  generate: (onChunk?: (text: string) => void) => Promise<string>;
 };
 
 type OpenAICompatibleRequest = {
@@ -18,6 +18,10 @@ type OpenAICompatibleRequest = {
   maxTokens: number;
   fetchImpl?: typeof fetch;
 };
+
+function extractDeltaContent(value: unknown): string {
+  return extractMessageContent(value);
+}
 
 function extractMessageContent(value: unknown): string {
   if (typeof value === "string") return value;
@@ -31,7 +35,7 @@ function extractMessageContent(value: unknown): string {
     .join("");
 }
 
-export async function requestOpenAICompatibleChat(input: OpenAICompatibleRequest): Promise<string> {
+export async function requestOpenAICompatibleChat(input: OpenAICompatibleRequest, onChunk?: (text: string) => void): Promise<string> {
   const fetchImpl = input.fetchImpl ?? fetch;
   let response: Response;
   try {
@@ -45,6 +49,7 @@ export async function requestOpenAICompatibleChat(input: OpenAICompatibleRequest
         model: input.model,
         messages: input.messages,
         max_tokens: input.maxTokens,
+        stream: true,
       }),
       signal: AbortSignal.timeout(45_000),
     });
@@ -56,35 +61,69 @@ export async function requestOpenAICompatibleChat(input: OpenAICompatibleRequest
     throw new Error(`${input.provider} request failed with HTTP ${response.status}.`);
   }
 
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    throw new Error(`${input.provider} returned invalid JSON.`);
+  if (response.headers.get("content-type")?.includes("application/json")) {
+    let payload: unknown;
+    try { payload = await response.json(); }
+    catch { throw new Error(`${input.provider} returned invalid JSON.`); }
+    const content = extractMessageContent(
+      (payload as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0]?.message?.content,
+    );
+    if (!content.trim()) throw new Error(`${input.provider} returned an empty response.`);
+    onChunk?.(content);
+    return content;
   }
 
-  const content = extractMessageContent(
-    (payload as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0]?.message?.content,
-  );
+  if (!response.body) throw new Error(`${input.provider} returned an empty response stream.`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  let streamEnded = false;
+  const processLine = (line: string) => {
+    if (!line.startsWith("data:")) return;
+    const data = line.slice(5).trim();
+    if (!data || data === "[DONE]") {
+      if (data === "[DONE]") streamEnded = true;
+      return;
+    }
+    let payload: unknown;
+    try { payload = JSON.parse(data); }
+    catch { throw new Error(`${input.provider} returned invalid streaming JSON.`); }
+    const delta = extractDeltaContent((payload as { choices?: Array<{ delta?: { content?: unknown } }> })?.choices?.[0]?.delta?.content);
+    if (delta) {
+      content += delta;
+      onChunk?.(delta);
+    }
+  };
+  while (!streamEnded) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) processLine(line.trimEnd());
+    if (done) break;
+  }
+  if (buffer) processLine(buffer.trimEnd());
   if (!content.trim()) throw new Error(`${input.provider} returned an empty response.`);
   return content;
 }
 
 export async function generateWithProviderFallback(
   attempts: ProviderAttempt[],
-  onFailure: (attempt: ProviderAttempt, error: unknown, remaining: number) => void = () => undefined,
+  onFailure: (attempt: ProviderAttempt, error: unknown, remaining: number) => void | Promise<void> = () => undefined,
+  onChunk?: (text: string) => void,
 ) {
   if (!attempts.length) throw new Error("No AI providers are configured.");
 
   let lastError: unknown;
   for (const [index, attempt] of attempts.entries()) {
     try {
-      const text = await attempt.generate();
+      const text = await attempt.generate(onChunk);
       if (!text.trim()) throw new Error(`${attempt.provider} returned an empty response.`);
       return { text, provider: attempt.provider, model: attempt.model, attemptNumber: index + 1 };
     } catch (error) {
       lastError = error;
-      onFailure(attempt, error, attempts.length - index - 1);
+      await onFailure(attempt, error, attempts.length - index - 1);
     }
   }
 

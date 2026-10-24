@@ -33,6 +33,10 @@ Edit [`system-instructions.txt`](system-instructions.txt) to control how the AI 
 
 - **AFK** — ask the bot to set your AFK status, e.g. `set my afk status, reason: done for the day`.
 - **Reminder** — ask the bot to remind you later, e.g. `remind me in 15 minutes to check the oven`.
+- **Polls** — ask for a poll with 2–10 choices, either now or after a delay, e.g. `make a poll now: pizza or tacos` or `schedule a poll in 2 hours: movie night or game night`.
+- **Timers** — ask for a countdown, e.g. `set a 10-minute timer for the oven`. The confirmation uses Discord's relative timestamp format and the bot posts when it ends.
+- **Scheduled messages** — ask Chromix to draft and post a message later in the current channel, e.g. `write and schedule an event reminder for tomorrow` or `schedule this announcement in 3 hours: ...`. Delays are limited to 30 days; ambiguous clock times need a timezone.
+- **Server details** — ask for member/channel counts, the highest role, or the server owner. These answers come from Discord's guild data.
 - **Avatar** — ask the bot to show an avatar or profile picture, e.g. `show me my avatar` or `show the avatar of @user`. To see someone else's avatar, **mention (ping) them** in the message; if you ask for another member's avatar without pinging anyone, the bot will ask you to ping them.
 - **Rock, Paper, Scissors** — ask the bot to play, e.g. `@Chromix let's play rock paper scissors`. Choose a button to play a round; the score stays visible until you press **End Game**. Only the person who started the game can make moves.
 - **Tic-Tac-Toe** — ask the bot to play, e.g. `@Chromix let's play tic tac toe`. You play X and Chromix plays O on a 3×3 button board. Only the person who started the game can make moves.
