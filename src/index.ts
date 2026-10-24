@@ -16,6 +16,7 @@ import { handleRockPaperScissorsButton, startRockPaperScissorsGame } from "./ser
 import { handleTicTacToeButton, startTicTacToeGame } from "./services/tic-tac-toe.js";
 import { buildPollPayload, getDuePolls, getPoll, publishPoll, votePoll } from "./services/polls.js";
 import { deleteTimer, getDueScheduledPosts, getDueTimers, markScheduledPostSent } from "./services/scheduled-actions.js";
+import { buildGiveawayPayload, drawGiveaway, getDueGiveaways, getGiveaway, joinGiveaway, leaveGiveaway, markGiveawayEnded } from "./services/giveaways.js";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
 const prefix = "c.";
@@ -58,6 +59,32 @@ async function deliverDueScheduledActions() {
         await deleteTimer(timer.id);
       } catch (error) {
         console.error(`Timer ${timer.id} could not be delivered; it will be retried.`, error);
+      }
+    }
+    for (const dueGiveaway of await getDueGiveaways()) {
+      try {
+        const giveaway = await drawGiveaway(dueGiveaway.id);
+        if (!giveaway) continue;
+        const resultPayload = await buildGiveawayPayload(giveaway);
+        let updated = false;
+        if (giveaway.message_id) {
+          try {
+            const channel = await client.channels.fetch(giveaway.channel_id);
+            if (channel && "messages" in channel) {
+              const message = await channel.messages.fetch(giveaway.message_id);
+              await message.edit(resultPayload);
+              updated = true;
+            }
+          } catch (error) {
+            const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+            if (code !== 10008) throw error;
+            // A removed original post is replaced with a final announcement below.
+          }
+        }
+        if (!updated) await sendChannelMessage(giveaway.channel_id, resultPayload);
+        await markGiveawayEnded(giveaway.id);
+      } catch (error) {
+        console.error(`Giveaway ${dueGiveaway.id} could not be finalized; it will be retried.`, error);
       }
     }
   } catch (error) {
@@ -116,6 +143,54 @@ async function handlePollVote(interaction: StringSelectMenuInteraction) {
   if (!Number.isSafeInteger(pollId) || pollId <= 0) throw new Error("That poll could not be found.");
   const poll = await votePoll(pollId, interaction.user.id, optionIndex);
   await interaction.update(await buildPollPayload(poll));
+}
+
+async function handleGiveawayButton(interaction: ButtonInteraction) {
+  if (await isUserBlacklisted(interaction.user.id)) {
+    await interaction.reply({ content: "You are blacklisted and cannot use bot commands.", ephemeral: true });
+    return;
+  }
+  const match = /^giveaway:(join|leave):(\d+)$/.exec(interaction.customId);
+  const giveawayId = Number(match?.[2]);
+  if (!match || !Number.isSafeInteger(giveawayId) || giveawayId <= 0 || !interaction.guild) {
+    await interaction.reply({ content: "That giveaway could not be found.", ephemeral: true });
+    return;
+  }
+  const giveaway = await getGiveaway(giveawayId);
+  if (!giveaway || giveaway.guild_id !== interaction.guildId) {
+    await interaction.reply({ content: "That giveaway could not be found in this server.", ephemeral: true });
+    return;
+  }
+
+  if (match[1] === "join" && giveaway.required_role_id) {
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+    if (!member?.roles.cache.has(giveaway.required_role_id)) {
+      await interaction.reply({ content: `You need the <@&${giveaway.required_role_id}> role to join this giveaway.`, ephemeral: true });
+      return;
+    }
+  }
+
+  const result = match[1] === "join"
+    ? await joinGiveaway(giveawayId, interaction.user.id)
+    : await leaveGiveaway(giveawayId, interaction.user.id);
+  if (result === "closed" || result === "missing") {
+    await interaction.reply({ content: "This giveaway has ended or is no longer available.", ephemeral: true });
+    return;
+  }
+  if (result === "already_joined") {
+    await interaction.reply({ content: "You’re already entered in this giveaway.", ephemeral: true });
+    return;
+  }
+  if (result === "not_entered") {
+    await interaction.reply({ content: "You haven’t joined this giveaway.", ephemeral: true });
+    return;
+  }
+  const currentGiveaway = await getGiveaway(giveawayId);
+  if (!currentGiveaway) {
+    await interaction.reply({ content: "This giveaway is no longer available.", ephemeral: true });
+    return;
+  }
+  await interaction.update(await buildGiveawayPayload(currentGiveaway));
 }
 
 function isAdmin(member: { permissions: PermissionsBitField } | null) {
@@ -371,7 +446,7 @@ function helpEmbed() {
       { name: "Polls and timers", value: "Ask me to create a poll now or later, or start a countdown timer. Timers show a live Discord relative timestamp and post a notice when they finish." },
       { name: "Scheduled messages", value: "Ask me to write and schedule a message in this channel, up to 30 days ahead. Scheduled posts do not trigger role or everyone mentions." },
       { name: "Server details", value: "Ask about member and channel counts, the highest role, or the server owner. I use Discord's cached server data; counts can lag until Discord updates the bot." },
-      { name: "Server admins", value: "`c.admin <request>` (or `c.adminchat <request>`) creates and manages text channels/categories. Batch layouts support multiple categories and channels. `/listen` and `/ignore` control which channels allow the bot." },
+      { name: "Server admins", value: "`c.admin <request>` (or `c.adminchat <request>`) creates and manages text channels/categories and starts giveaways with join/leave buttons. Giveaways support a required role, winner count, and automatic draw at the end time. `/listen` and `/ignore` control which channels allow the bot." },
     );
 }
 
@@ -705,6 +780,10 @@ client.on(Events.InteractionCreate, async interaction => {
       else await handleSettingSelect(interaction);
     }
     if (interaction.isButton()) {
+      if (interaction.customId.startsWith("giveaway:")) {
+        await handleGiveawayButton(interaction);
+        return;
+      }
       if (interaction.customId.startsWith("rps:") || interaction.customId.startsWith("ttt:")) {
         if (await isUserBlacklisted(interaction.user.id)) {
           await interaction.reply({ content: "You are blacklisted and cannot use bot commands.", ephemeral: true });

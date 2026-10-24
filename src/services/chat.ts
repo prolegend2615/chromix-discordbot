@@ -27,6 +27,7 @@ import {
   parseShowAvatarCommand,
   parseTicTacToeCommand,
   hasToolAction,
+  parseCreateGiveawayCommand,
 } from "../logic.js";
 import { createReminder } from "./reminders.js";
 import { reserveVoiceMessage, type VoiceReservation } from "./tts.js";
@@ -39,6 +40,7 @@ import { config } from "../config.js";
 import { runWebSearchAgent, searchWeb, formatWebSearchSources } from "./web-search.js";
 import { createPoll, buildPollPayload, getPoll, publishPoll } from "./polls.js";
 import { createScheduledPost, createTimer, parseScheduleDuration } from "./scheduled-actions.js";
+import { buildGiveawayPayload, createGiveaway, deleteGiveaway, getGiveaway, publishGiveaway, resolveGiveawayRole } from "./giveaways.js";
 
 const activePrompts = new Set<string>();
 const serverFactsCache = new Map<string, { expiresAt: number; facts: string }>();
@@ -304,6 +306,7 @@ export async function runChat(args: {
     const samSpeakCommand = args.adminChat ? null : parseSamSpeakCommand(answer);
 
     const channelManagementCommand = args.adminChat ? parseChannelManagementCommand(answer) : null;
+    const giveawayCommand = args.adminChat ? parseCreateGiveawayCommand(answer) : null;
     const parsedToolAction = Boolean(
       afkCommand
       || reminderCommand
@@ -315,7 +318,8 @@ export async function runChat(args: {
       || rockPaperScissorsCommand
       || ticTacToeCommand
       || samSpeakCommand
-      || channelManagementCommand,
+      || channelManagementCommand
+      || giveawayCommand,
     );
     if (webSearch.results.length && !parsedToolAction) {
       answer = `${answer}${formatWebSearchSources(webSearch.results)}`;
@@ -331,6 +335,7 @@ export async function runChat(args: {
                   : avatarCommand ? "Fetching that avatar…"
                     : samSpeakCommand ? "🔊 Generating your voice message…"
                       : rockPaperScissorsCommand || ticTacToeCommand ? "Starting your game…"
+                        : giveawayCommand ? "🎉 Setting up the giveaway…"
                         : channelManagementCommand?.action === "create_layout" ? "Building your server layout…"
                           : channelManagementCommand ? "Updating the server…"
                           : "I couldn't use that tool request. Please try again.";
@@ -353,6 +358,42 @@ export async function runChat(args: {
         actionResponseHandled = true;
         await editResponse(answer).catch(() => undefined);
       }
+    }
+
+    if (giveawayCommand) {
+      const guild = "guild" in args.channel && args.channel.guild ? args.channel.guild : null;
+      const durationSeconds = parseScheduleDuration(giveawayCommand.duration);
+      if (!guild || !args.guildId || !isSendableTextChannel(args.channel)) {
+        answer = "Giveaways can only be started in a server text channel.";
+      } else if (durationSeconds === null || durationSeconds < 60) {
+        answer = "Giveaways must end between 1 minute and 30 days from now.";
+      } else {
+        let giveawayId: number | undefined;
+        try {
+          const requiredRole = await resolveGiveawayRole(guild, giveawayCommand.requiredRole);
+          const endsAt = Date.now() + durationSeconds * 1000;
+          giveawayId = await createGiveaway({
+            guildId: args.guildId,
+            channelId: args.channelId,
+            creatorId: args.user.id,
+            prize: giveawayCommand.prize,
+            endsAt,
+            winnerCount: giveawayCommand.winnerCount,
+            requiredRoleId: requiredRole?.id ?? null,
+            requiredRoleName: requiredRole?.name ?? null,
+          });
+          const giveaway = await getGiveaway(giveawayId);
+          if (!giveaway) throw new Error("The giveaway could not be loaded after creation.");
+          const post = await args.channel.send(await buildGiveawayPayload(giveaway, true));
+          if (!(await publishGiveaway(giveawayId, post.id))) throw new Error("The giveaway post could not be activated.");
+          answer = `🎉 Giveaway #${giveawayId} is live in <#${args.channelId}> and ends <t:${Math.floor(endsAt / 1000)}:R>.`;
+        } catch (error) {
+          if (giveawayId !== undefined) await deleteGiveaway(giveawayId).catch(() => undefined);
+          answer = error instanceof Error ? `I couldn't start the giveaway: ${error.message}` : "I couldn't start the giveaway.";
+        }
+      }
+      actionResponseHandled = true;
+      await editResponse(answer).catch(() => undefined);
     }
 
     if (afkCommand) {
