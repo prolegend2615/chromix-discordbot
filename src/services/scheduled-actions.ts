@@ -20,9 +20,10 @@ export async function createScheduledPost(input: { guildId: string; channelId: s
   const db = await dbPromise;
   const pending = await db.get<{ count: number }>("SELECT COUNT(*) AS count FROM scheduled_posts WHERE creator_id=? AND status='scheduled'", input.creatorId);
   if (Number(pending?.count ?? 0) >= 10) throw new Error("You can have up to 10 scheduled messages pending at a time.");
+  const now = Date.now();
   const result = await db.run(
-    "INSERT INTO scheduled_posts(guild_id,channel_id,creator_id,content,scheduled_at) VALUES(?,?,?,?,?)",
-    input.guildId, input.channelId, input.creatorId, content, input.scheduledAt,
+    "INSERT INTO scheduled_posts(guild_id,channel_id,creator_id,content,scheduled_at,created_at) VALUES(?,?,?,?,?,?)",
+    input.guildId, input.channelId, input.creatorId, content, input.scheduledAt, now,
   );
   return Number(result.lastID);
 }
@@ -41,7 +42,7 @@ export async function createTimer(input: { channelId: string; creatorId: string;
   const db = await dbPromise;
   const pending = await db.get<{ count: number }>("SELECT COUNT(*) AS count FROM timers WHERE creator_id=?", input.creatorId);
   if (Number(pending?.count ?? 0) >= 10) throw new Error("You can have up to 10 timers running at a time.");
-  const result = await db.run("INSERT INTO timers(channel_id,creator_id,label,due_at) VALUES(?,?,?,?)", input.channelId, input.creatorId, label, input.dueAt);
+  const result = await db.run("INSERT INTO timers(channel_id,creator_id,label,due_at,created_at) VALUES(?,?,?,?,?)", input.channelId, input.creatorId, label, input.dueAt, Date.now());
   return Number(result.lastID);
 }
 
