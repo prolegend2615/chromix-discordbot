@@ -51,17 +51,17 @@ function isSendableTextChannel(channel: TextBasedChannel): channel is SendableTe
   return "send" in channel && typeof channel.send === "function";
 }
 
-function splitDiscordMessage(content: string): string[] {
+function splitDiscordMessage(content: string, limit = DISCORD_MESSAGE_LIMIT): string[] {
   if (!content) return ["I could not generate a response."];
   const chunks: string[] = [];
   let remaining = content;
 
-  while (remaining.length > DISCORD_MESSAGE_LIMIT) {
-    const candidate = remaining.slice(0, DISCORD_MESSAGE_LIMIT);
+  while (remaining.length > limit) {
+    const candidate = remaining.slice(0, limit);
     const newline = candidate.lastIndexOf("\n");
     const space = candidate.lastIndexOf(" ");
     const splitAt = Math.max(newline, space);
-    const cutAt = splitAt > 0 ? splitAt : DISCORD_MESSAGE_LIMIT;
+    const cutAt = splitAt > 0 ? splitAt : limit;
     chunks.push(remaining.slice(0, cutAt));
     remaining = remaining.slice(cutAt).replace(/^[ \n]+/, "");
   }
@@ -76,10 +76,13 @@ const ACTION_PREFIXES = [
   "use rock_paper_scissors", "use tic_tac_toe", "use search_",
 ];
 
-function createStreamingEditor(edit: (content: string) => Promise<unknown>) {
+function createStreamingEditor(editFirst: (content: string) => Promise<unknown>, sendNext: (content: string) => Promise<Message>) {
   let draft = "";
-  let published = "";
+  const published: string[] = [];
+  const extraMessages: Message[] = [];
   let lastEditAt = 0;
+  let bufferedCharacters = 0;
+  let editError: unknown;
   let pending = Promise.resolve();
 
   const isActionOutput = (text: string) => {
@@ -87,37 +90,60 @@ function createStreamingEditor(edit: (content: string) => Promise<unknown>) {
     return ACTION_PREFIXES.some(prefix => normalized.startsWith(prefix) || prefix.startsWith(normalized));
   };
 
-  const enqueueEdit = (content: string) => {
-    if (content === published) return;
-    published = content;
-    lastEditAt = Date.now();
-    pending = pending.then(() => edit(content)).then(() => undefined).catch(() => undefined);
+  const enqueueReconcile = (final = false) => {
+    const chunks = splitDiscordMessage(draft, 1900);
+    if (!final && chunks.length > 1 && chunks[chunks.length - 1].length < 35) chunks.pop();
+    pending = pending.then(async () => {
+      for (let index = 0; index < chunks.length; index += 1) {
+        const content = chunks[index];
+        if (published[index] === content) continue;
+        if (index === 0) await editFirst(content);
+        else if (extraMessages[index - 1]) await extraMessages[index - 1].edit(content);
+        else extraMessages[index - 1] = await sendNext(content);
+        published[index] = content;
+      }
+      if (final) {
+        while (published.length > chunks.length) {
+          const index = published.length - 1;
+          if (index > 0) await extraMessages[index - 1]?.delete().catch(() => undefined);
+          extraMessages.splice(index - 1, 1);
+          published.pop();
+        }
+      }
+    }).then(() => { editError = undefined; }).catch(error => { editError = error; });
   };
-
-  const visibleDraft = () => draft.length <= 1900 ? draft : `${draft.slice(0, 1897)}…`;
 
   return {
     push(text: string) {
       draft += text;
+      bufferedCharacters += text.length;
       if (isActionOutput(draft)) return;
-      const visible = visibleDraft();
-      const added = visible.length - published.length;
-      if (visible.trim() && added >= 35 && Date.now() - lastEditAt >= 900) {
-        enqueueEdit(visible);
+      const chunks = splitDiscordMessage(draft, 1900);
+      const messageBoundaryReached = chunks.length > 1 && chunks.length > Math.max(1, published.length);
+      if (draft.trim() && (messageBoundaryReached || (bufferedCharacters >= 60 && Date.now() - lastEditAt >= 900))) {
+        enqueueReconcile();
+        bufferedCharacters = 0;
+        lastEditAt = Date.now();
       }
     },
-    async finish() {
-      if (!isActionOutput(draft) && draft.trim()) enqueueEdit(visibleDraft());
+    async finish(finalText = draft) {
+      draft = finalText;
+      if (!isActionOutput(draft) && draft.trim()) enqueueReconcile(true);
       await pending;
+      if (editError) throw editError;
     },
     async reset(status = "Retrying with another AI provider…") {
       await pending;
+      for (const message of extraMessages) await message.delete().catch(() => undefined);
+      extraMessages.length = 0;
+      published.length = 0;
       draft = "";
-      published = "";
-      enqueueEdit(status);
+      editError = undefined;
+      bufferedCharacters = 0;
+      lastEditAt = Date.now();
+      pending = pending.then(() => editFirst(status)).then(() => { editError = undefined; }).catch(error => { editError = error; });
       await pending;
-      published = "";
-      lastEditAt = 0;
+      published.push(status);
     },
   };
 }
@@ -204,7 +230,10 @@ export async function runChat(args: {
     if ("sendTyping" in args.channel) await args.channel.sendTyping();
     const placeholder = await args.reply("Thinking…");
     const editResponse = args.edit ?? (content => placeholder.edit(content));
-    const streamingEditor = createStreamingEditor(editResponse);
+    const streamingEditor = createStreamingEditor(editResponse, async content => {
+      if (!isSendableTextChannel(args.channel)) throw new Error("This channel cannot receive additional response messages.");
+      return args.channel.send({ content, allowedMentions: { parse: [] } });
+    });
 
     if (!args.adminChat && hasTtsIntent(prompt)) {
       voiceReservation = reserveVoiceMessage({ channel: args.channel, channelId: args.channelId });
@@ -264,7 +293,6 @@ export async function runChat(args: {
       }),
       onSearchStart: () => streamingEditor.reset("Searching the web…"),
     });
-    await streamingEditor.finish();
     let answer = webSearch.answer;
 
     const afkCommand = args.adminChat ? null : parseSetAfkCommand(answer);
@@ -458,18 +486,7 @@ export async function runChat(args: {
     }
 
     if (!actionResponseHandled) {
-      const chunks = splitDiscordMessage(answer);
-      const editMessage = editResponse;
-      await editMessage(chunks[0]);
-      if (chunks.length > 1) {
-        const sendableChannel = args.channel;
-        if (!isSendableTextChannel(sendableChannel)) {
-          throw new Error("This channel cannot receive additional response messages.");
-        }
-        for (const chunk of chunks.slice(1)) {
-          await sendableChannel.send(chunk);
-        }
-      }
+      await streamingEditor.finish(answer);
     }
 
     const responseTimeMs = Date.now() - startedAt;
