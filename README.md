@@ -21,16 +21,24 @@ Edit [`system-instructions.txt`](system-instructions.txt) to control how the AI 
 - `c.chat <message>` / `/chat`
 - Mention the bot or reply to one of its messages
 - `c.settings` / `/settings`
+- `c.rpsettings` (opens private SFW roleplay settings; roleplay is off by default)
 - `/help`, `/status`, `/persona`
 - `c.clear` / `/clear`
 - `c.reset` / `/reset`
 - `/delete-my-data` (keeps VIP access)
-- `/give-vip @user` (restricted to the configured owner ID)
+- `c.givevip @user 7d` (restricted to the configured owner ID; grants temporary VIP for 1 minute to 365 days)
+- `c.remove-vip @user` / `/remove-vip` (restricted to the configured owner ID)
 - `c.listen [channel]` / `/listen` (server administrators)
 - `c.ignore [channel]` / `/ignore` (server administrators)
 - `c.admin <request>` / `c.adminchat <request>` (server administrators; creates and manages text channels and categories)
 
 In admin chat, ask Chromix to build several categories and channels in one prompt. It creates categories first and assigns channels during creation, uses colorful Unicode emoji names such as `💬┃general` by default, and tracks channel-creation calls in SQLite to stay within the configured limit of 10 creations per rolling 10 minutes. If that limit is full, it shows a status and waits for the next slot.
+
+Mention Chromix, reply to one of its messages, or use `c.chat` with PNG/JPEG/WebP/GIF images, PDFs, or common plain-text/code files attached. Free users can analyze 3 uploads per rolling hour; VIP users can analyze 10. Each file must be 8 MB or smaller and each message can contain at most 16 MB of supported attachments. Upload content is sent to the selected AI provider, or a configured fallback provider if needed; only upload timestamps are stored for quota tracking.
+
+When a user asks about recent channel context, Chromix can fetch up to 20 earlier messages in the current channel, including author names and timestamps. The bot needs permission to view the channel and read its message history.
+
+`c.rpsettings` opens a private panel for an optional SFW roleplay mode. Users can set one relationship, up to three traits, and roleplay intensity; preferences apply across servers and DMs. Roleplay stays concise, and ordinary playful or exaggerated situations do not automatically make Chromix drop character.
 
 Administrators can also create colored roles with `c.admin` (Chromix chooses a fitting hex color if none is specified), and start giveaways with `c.admin`, for example: `start a giveaway for a Nitro gift, ending in 1 day, with 2 winners; only members with the VIP role can enter`. Chromix posts a styled embed with join/leave buttons, a live entry count, Discord end-time timestamps, optional role eligibility, and an automatic winner draw. Giveaway entries and end times are stored in SQLite and survive bot restarts.
 

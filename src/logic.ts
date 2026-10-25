@@ -74,7 +74,15 @@ export function readToolActionArguments(text: string, name: string, argumentCoun
 }
 
 export function hasToolAction(text: string): boolean {
-  return /\buse\s+(?:set_afk|set_reminder|sam_speak|show_avatar|generate_image|create_poll|set_timer|schedule_message|create_giveaway|create_role|create_channel|create_category|create_layout|delete_channel|delete_category|view_channels|rock_paper_scissors|tic_tac_toe|search_(?:brave|exa))\b/i.test(text);
+  return /\buse\s+(?:set_afk|set_reminder|sam_speak|show_avatar|generate_image|create_poll|set_timer|schedule_message|get_recent_messages|create_giveaway|create_role|create_channel|create_category|create_layout|delete_channel|delete_category|view_channels|rock_paper_scissors|tic_tac_toe|search_(?:brave|exa))\b/i.test(text);
+}
+
+export function parseGetRecentMessagesCommand(text: string): { count: number } | null {
+  const args = readAction(text, "get_recent_messages", 1);
+  if (!args) return null;
+  const count = Number(args[0].trim());
+  if (!Number.isInteger(count) || count < 1 || count > 20) return null;
+  return { count };
 }
 
 export type CreateGiveawayCommand = {

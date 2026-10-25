@@ -1,7 +1,7 @@
 import { ChannelType, PermissionsBitField, type Message, type MessageCreateOptions, type User, type GuildMember, type TextBasedChannel } from "discord.js";
 import { getSettings } from "./settings.js";
 import { addHistory, getHistory } from "./history.js";
-import { checkPromptLimit, isChannelAllowed } from "./access.js";
+import { checkPromptLimit, isChannelAllowed, releaseAttachmentUploadReservations, reserveAttachmentUploads } from "./access.js";
 import { streamAnswer } from "./ai.js";
 import { recordResponseMetric, resolveThreadConversationKey } from "./metrics.js";
 import { clearAfkStatus, getAfkStatus, normalizeAfkReason, setAfkStatus, type AfkStatus } from "./afk.js";
@@ -28,6 +28,7 @@ import {
   parseTicTacToeCommand,
   hasToolAction,
   parseCreateGiveawayCommand,
+  parseGetRecentMessagesCommand,
 } from "../logic.js";
 import { createReminder } from "./reminders.js";
 import { reserveVoiceMessage, type VoiceReservation } from "./tts.js";
@@ -41,6 +42,7 @@ import { runWebSearchAgent, searchWeb, formatWebSearchSources } from "./web-sear
 import { createPoll, buildPollPayload, getPoll, publishPoll } from "./polls.js";
 import { createScheduledPost, createTimer, parseScheduleDuration } from "./scheduled-actions.js";
 import { buildGiveawayPayload, createGiveaway, deleteGiveaway, getGiveaway, publishGiveaway, resolveGiveawayRole } from "./giveaways.js";
+import { prepareAttachments, validateAttachmentInputs, type DiscordAttachmentInput } from "./attachments.js";
 
 const activePrompts = new Set<string>();
 const serverFactsCache = new Map<string, { expiresAt: number; facts: string }>();
@@ -178,8 +180,33 @@ async function getServerFacts(channel: TextBasedChannel): Promise<string> {
   return facts;
 }
 
+async function fetchRecentChannelMessages(channel: TextBasedChannel, count: number, excludeMessageId?: string): Promise<string> {
+  if (!("messages" in channel) || !channel.messages || typeof channel.messages.fetch !== "function") {
+    return "Recent messages are unavailable for this channel type.";
+  }
+  try {
+    const messages = await channel.messages.fetch({ limit: Math.min(100, count + (excludeMessageId ? 1 : 0)) });
+    const recent = [...messages.values()]
+      .filter(message => message.id !== excludeMessageId)
+      .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+      .slice(-count);
+    if (!recent.length) return "No earlier messages were available in this channel.";
+    return recent.map(message => {
+      const author = message.member?.displayName ?? message.author.globalName ?? message.author.username;
+      const content = message.content.trim() || "[No text content]";
+      const attachments = message.attachments.size
+        ? ` [Attachments: ${[...message.attachments.values()].map(file => file.name ?? "unnamed file").join(", ")}]`
+        : "";
+      return `[${new Date(message.createdTimestamp).toISOString()}] ${author}: ${(content + attachments).slice(0, 1200)}`;
+    }).join("\n").slice(-16_000);
+  } catch {
+    return "I could not read recent messages. The bot may not have permission to view message history in this channel.";
+  }
+}
+
 export async function runChat(args: {
   prompt: string;
+  attachments?: DiscordAttachmentInput[];
   adminChat?: boolean;
   user: User;
   member: GuildMember | null;
@@ -199,7 +226,8 @@ export async function runChat(args: {
   onTicTacToe?: (placeholder: Message) => Promise<void>;
   onWelcomeBack?: (status: AfkStatus) => Promise<void>;
 }) {
-  const prompt = args.prompt.trim();
+  const attachmentInputs = args.attachments ?? [];
+  const prompt = args.prompt.trim() || (attachmentInputs.length ? "Please analyze the attached file(s) and help me understand them." : "");
   if (!prompt) throw new Error("Please include a message for me to answer.");
   if (args.adminChat && (!args.guildId || !args.member?.permissions.has(PermissionsBitField.Flags.Administrator))) {
     throw new Error("Only server administrators can use admin chat.");
@@ -240,6 +268,26 @@ export async function runChat(args: {
     if (existingAfk) await args.onWelcomeBack?.(existingAfk);
 
     const settings = await getSettings(args.user.id, args.guildId);
+    let preparedAttachments = [] as Awaited<ReturnType<typeof prepareAttachments>>;
+    try {
+      const attachmentDescriptors = validateAttachmentInputs(attachmentInputs);
+      if (attachmentDescriptors.length) {
+        const reservation = await reserveAttachmentUploads(args.user.id, Boolean(settings.vip), attachmentDescriptors.length);
+        if (!reservation.ok) {
+          throw new Error(`You have ${reservation.remaining} of ${reservation.limit} attachment uploads left in this rolling hour. ${settings.vip ? "VIP users get 10 uploads per hour." : "Free users get 3 uploads per hour."}`);
+        }
+        try {
+          preparedAttachments = await prepareAttachments(attachmentDescriptors);
+        } catch (error) {
+          await releaseAttachmentUploadReservations(reservation.eventIds);
+          throw error;
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "I couldn't read those attachments.";
+      await editResponse(message).catch(() => undefined);
+      return;
+    }
     const history = args.adminChat
       ? []
       : await getHistory(args.user.id, args.guildId, conversationChannelId, settings.vip ? 12 : 5);
@@ -248,42 +296,58 @@ export async function runChat(args: {
     const serverNickname = args.member?.nickname ?? "None";
     const serverFacts = await getServerFacts(args.channel);
     const startedAt = Date.now();
+    let recentMessagesContext = "";
+    let recentMessagesUsed = false;
     const webSearch = await runWebSearchAgent({
       enabled: !args.adminChat,
       ask: async context => {
-        let response = "";
-        await streamAnswer({
-          prompt,
-          userName,
-          serverNickname,
-          guildName: args.guildName ?? "Direct Message",
-          serverFacts,
-          settings,
-          history,
-          messageTimestamp: args.messageTimestamp ?? Date.now(),
-          adminChatActionEnabled: args.adminChat,
-          reminderActionEnabled: !args.adminChat && hasReminderIntent(prompt)
-            && !hasScheduleMessageIntent(prompt) && !hasPollIntent(prompt) && !hasTimerIntent(prompt),
-          pollActionEnabled: !args.adminChat && Boolean(args.guildId) && hasPollIntent(prompt),
-          timerActionEnabled: !args.adminChat && hasTimerIntent(prompt),
-          scheduledMessageActionEnabled: !args.adminChat && Boolean(args.guildId) && hasScheduleMessageIntent(prompt),
-          ttsActionEnabled: !args.adminChat && hasTtsIntent(prompt),
-          imageGenerationActionEnabled: !args.adminChat && hasImageGenerationIntent(prompt),
-          rockPaperScissorsActionEnabled: !args.adminChat && hasRockPaperScissorsIntent(prompt),
-          ticTacToeActionEnabled: !args.adminChat && hasTicTacToeIntent(prompt),
-          webSearchActionEnabled: context.availableProviders.length > 0,
-          webSearchAvailableProviders: context.availableProviders,
-          webSearchFeedback: context.feedback,
-          onDelta: text => {
-            response += text;
-            streamingEditor.push(text);
-          },
-          onProviderRetry: async remainingAttempts => {
-            response = "";
-            await streamingEditor.reset(remainingAttempts > 0 ? "Retrying with another AI provider…" : "The AI provider failed.");
-          },
-        });
-        return response;
+        for (let actionTurn = 0; actionTurn < 2; actionTurn += 1) {
+          let response = "";
+          await streamAnswer({
+            prompt,
+            userName,
+            serverNickname,
+            guildName: args.guildName ?? "Direct Message",
+            serverFacts,
+            recentMessagesActionEnabled: !args.adminChat && Boolean(args.guildId),
+            recentMessagesContext,
+            attachments: preparedAttachments,
+            settings,
+            history,
+            messageTimestamp: args.messageTimestamp ?? Date.now(),
+            adminChatActionEnabled: args.adminChat,
+            reminderActionEnabled: !args.adminChat && hasReminderIntent(prompt)
+              && !hasScheduleMessageIntent(prompt) && !hasPollIntent(prompt) && !hasTimerIntent(prompt),
+            pollActionEnabled: !args.adminChat && Boolean(args.guildId) && hasPollIntent(prompt),
+            timerActionEnabled: !args.adminChat && hasTimerIntent(prompt),
+            scheduledMessageActionEnabled: !args.adminChat && Boolean(args.guildId) && hasScheduleMessageIntent(prompt),
+            ttsActionEnabled: !args.adminChat && hasTtsIntent(prompt),
+            imageGenerationActionEnabled: !args.adminChat && hasImageGenerationIntent(prompt),
+            rockPaperScissorsActionEnabled: !args.adminChat && hasRockPaperScissorsIntent(prompt),
+            ticTacToeActionEnabled: !args.adminChat && hasTicTacToeIntent(prompt),
+            webSearchActionEnabled: context.availableProviders.length > 0,
+            webSearchAvailableProviders: context.availableProviders,
+            webSearchFeedback: context.feedback,
+            onDelta: text => {
+              response += text;
+              streamingEditor.push(text);
+            },
+            onProviderRetry: async remainingAttempts => {
+              response = "";
+              await streamingEditor.reset(remainingAttempts > 0 ? "Retrying with another AI provider…" : "The AI provider failed.");
+            },
+          });
+          const recentMessagesCommand = args.adminChat ? null : parseGetRecentMessagesCommand(response);
+          if (!recentMessagesCommand) {
+            if (/\buse\s+get_recent_messages\b/i.test(response)) return "I couldn't retrieve the channel context for that request.";
+            return response;
+          }
+          if (!args.guildId || recentMessagesUsed) return "I couldn't retrieve the channel context for that request.";
+          recentMessagesUsed = true;
+          recentMessagesContext = await fetchRecentChannelMessages(args.channel, recentMessagesCommand.count, args.sourceMessageId);
+          await streamingEditor.reset("Checking recent channel messages…");
+        }
+        return "I couldn't retrieve the channel context for that request.";
       },
       search: (provider, query) => searchWeb(provider, query, {
         apiKey: provider === "brave" ? config.braveSearchApiKey : config.exaApiKey,
@@ -549,7 +613,8 @@ export async function runChat(args: {
     const responseTimeMs = Date.now() - startedAt;
     await recordResponseMetric(args.user.id, args.guildId, conversationChannelId, responseTimeMs);
     if (!args.adminChat) {
-      await addHistory(args.user.id, args.guildId, conversationChannelId, { role: "user", content: prompt }, args.sourceMessageId, args.referencedMessageId);
+      const attachmentSummary = preparedAttachments.length ? `\n[Attached files: ${preparedAttachments.map(file => file.name).join(", ")}]` : "";
+      await addHistory(args.user.id, args.guildId, conversationChannelId, { role: "user", content: `${prompt}${attachmentSummary}` }, args.sourceMessageId, args.referencedMessageId);
       await addHistory(args.user.id, args.guildId, conversationChannelId, { role: "assistant", content: answer }, placeholder.id);
     }
   } finally {

@@ -6,8 +6,8 @@ import {
 import { config } from "./config.js";
 import { runChat } from "./services/chat.js";
 import { clearHistory } from "./services/history.js";
-import { deleteUserDataExceptVip, getSettings, isUserBlacklisted, PERSONAS, resetSettings, setUserBlacklist, setVip, updateSettings, type Persona, type Provider, type ResponseLength, type SafetyLevel } from "./services/settings.js";
-import { getPromptStatus, setChannelRule } from "./services/access.js";
+import { deleteUserDataExceptVip, getSettings, isUserBlacklisted, PERSONAS, resetSettings, setUserBlacklist, setVip, updateRoleplaySettings, updateSettings, ROLEPLAY_TRAITS, type Persona, type Provider, type ResponseLength, type RoleplayIntensity, type RoleplayRelationship, type RoleplayTrait, type SafetyLevel } from "./services/settings.js";
+import { getAttachmentUploadStatus, getPromptStatus, setChannelRule } from "./services/access.js";
 import { getAverageResponseTime } from "./services/metrics.js";
 import { clearAfkStatus, formatAfkDuration, formatAfkMention, getAfkStatus, type AfkStatus } from "./services/afk.js";
 import { extractMentionId, formatReminderDuration, isTransientNetworkError, MODELS, userFacingProviderError } from "./logic.js";
@@ -21,8 +21,26 @@ import { buildGiveawayPayload, drawGiveaway, getDueGiveaways, getGiveaway, joinG
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
 const prefix = "c.";
 const VIP_ADMIN_ID = "1347611715826876496";
+const VIP_MIN_DURATION_SECONDS = 60;
+const VIP_MAX_DURATION_SECONDS = 365 * 24 * 60 * 60;
 let reminderSweepInProgress = false;
 let scheduledActionSweepInProgress = false;
+
+function parseVipDuration(value: string): number | null {
+  const normalized = value.trim().replace(/^\((.*)\)$/u, "$1").replace(/^(?:vip\s+)?(?:for\s+)?/i, "").trim();
+  const match = /^(\d+)\s*(s|sec(?:ond)?s?|m|min(?:ute)?s?|h|hr|hour(?:s)?|d|day(?:s)?|w|week(?:s)?)$/i.exec(normalized);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isSafeInteger(amount) || amount <= 0) return null;
+  const unit = match[2].toLowerCase();
+  const secondsPerUnit = unit.startsWith("s") ? 1
+    : unit.startsWith("m") ? 60
+      : unit.startsWith("h") ? 3600
+        : unit.startsWith("d") ? 86400
+          : 604800;
+  const duration = amount * secondsPerUnit;
+  return duration >= VIP_MIN_DURATION_SECONDS && duration <= VIP_MAX_DURATION_SECONDS ? duration : null;
+}
 
 async function sendChannelMessage(channelId: string, payload: string | MessageCreateOptions) {
   const channel = await client.channels.fetch(channelId);
@@ -261,6 +279,7 @@ async function handleClearCommand(context: CommandContext, reset: boolean) {
 async function handleStatusCommand(context: CommandContext) {
   const settings = await getSettings(context.userId, context.guildId);
   const quota = await getPromptStatus(context.userId);
+  const attachmentQuota = await getAttachmentUploadStatus(context.userId, Boolean(settings.vip));
   const averageResponseMs = await getAverageResponseTime(context.userId);
   const persona = settings.persona === "Custom" ? `Custom: ${settings.custom_persona || "not configured"}` : settings.persona;
   await context.reply({
@@ -269,6 +288,8 @@ async function handleStatusCommand(context: CommandContext) {
       { name: "Persona", value: persona },
       { name: "Response length", value: settings.response_length, inline: true },
       { name: "History", value: `${settings.vip ? 12 : 5} messages${settings.vip ? " (VIP)" : ""}`, inline: true },
+      { name: "VIP access", value: !settings.vip ? "Not active" : settings.vip_expires_at ? `Active until <t:${Math.floor(settings.vip_expires_at / 1000)}:R>` : "Active (no expiry)", inline: true },
+      { name: "Attachment uploads", value: `${attachmentQuota.remaining}/${attachmentQuota.limit} left this hour${attachmentQuota.resetsInMs ? ` • next reset <t:${Math.floor((Date.now() + attachmentQuota.resetsInMs) / 1000)}:R>` : ""}`, inline: true },
       { name: "Average response", value: `${averageResponseMs} ms`, inline: true },
       { name: "Prompt quota", value: `${quota.remaining}/8 remaining this minute${quota.cooldownSeconds ? ` • cooldown: ${quota.cooldownSeconds}s` : ""}` },
       { name: "Quota violations", value: `${quota.violations} in the last ${Math.round(quota.windowMs / 1000)}s`, inline: true },
@@ -293,22 +314,33 @@ async function handlePersonaCommand(context: CommandContext) {
 async function handleDeleteMyDataCommand(context: CommandContext) {
   await deleteUserDataExceptVip(context.userId);
   await context.reply({
-    content: "Your saved conversations, prompts, reminders, timers, polls, scheduled messages, response metrics, quota violations, and personal settings were deleted. Your VIP status was kept.",
+    content: "Your saved conversations, prompts, attachment upload history, reminders, timers, polls, scheduled messages, response metrics, quota violations, and personal settings were deleted. Your VIP status was kept.",
     ephemeral: context.ephemeral,
     allowedMentions: { repliedUser: false },
   });
 }
 
-async function handleVipCommand(context: CommandContext, grant: boolean) {
+async function handleVipCommand(context: CommandContext, grant: boolean, durationSeconds?: number) {
   if (context.userId !== VIP_ADMIN_ID) throw new Error("You are not allowed to use this command.");
   if (!context.recipient) throw new Error("Mention a user to give or remove VIP access.");
-  await setVip(context.recipient.id, grant);
+  if (grant) {
+    if (!durationSeconds || durationSeconds < VIP_MIN_DURATION_SECONDS || durationSeconds > VIP_MAX_DURATION_SECONDS) {
+      throw new Error("Usage: `c.givevip @user 7d` (or `c.givevip @user vip for 7d`). Choose a duration from 1 minute to 365 days.");
+    }
+    const expiresAt = Date.now() + durationSeconds * 1000;
+    await setVip(context.recipient.id, true, expiresAt);
+    await context.reply({
+      content: `${context.recipient.username} now has VIP until <t:${Math.floor(expiresAt / 1000)}:F> (<t:${Math.floor(expiresAt / 1000)}:R>).`,
+      ephemeral: context.ephemeral,
+      allowedMentions: { parse: [], repliedUser: false },
+    });
+    return;
+  }
+  await setVip(context.recipient.id, false);
   await context.reply({
-    content: grant
-      ? `${context.recipient} now has VIP access. Their history limit is 12 messages.`
-      : `${context.recipient} no longer has VIP access.`,
+    content: `${context.recipient.username} no longer has VIP access.`,
     ephemeral: context.ephemeral,
-    allowedMentions: { repliedUser: false },
+    allowedMentions: { parse: [], repliedUser: false },
   });
 }
 
@@ -337,6 +369,32 @@ async function handleChannelRuleCommand(context: CommandContext, rule: "listen" 
 }
 
 type SettingsStep = "persona" | "length" | "provider" | "model" | "safety" | "prompt";
+const ROLEPLAY_RELATIONSHIPS: Array<{ label: string; value: RoleplayRelationship }> = [
+  { label: "No fixed relationship", value: "none" },
+  { label: "Friend", value: "friend" },
+  { label: "Enemy (playful rival)", value: "enemy" },
+  { label: "Classmate", value: "classmate" },
+  { label: "Little brother", value: "little_brother" },
+  { label: "Big brother", value: "big_brother" },
+  { label: "Little sister", value: "little_sister" },
+  { label: "Big sister", value: "big_sister" },
+  { label: "Husband", value: "husband" },
+  { label: "Wife", value: "wife" },
+];
+const ROLEPLAY_INTENSITIES: Array<{ label: string; value: RoleplayIntensity; description: string }> = [
+  { label: "Light", value: "light", description: "A little character flavor, mostly normal chat." },
+  { label: "Balanced", value: "balanced", description: "Natural roleplay mixed with direct conversation." },
+  { label: "Immersive", value: "immersive", description: "Stay in character more often, without long narration." },
+];
+
+function parseRoleplayTraits(value: string): RoleplayTrait[] {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((trait): trait is RoleplayTrait => typeof trait === "string" && (ROLEPLAY_TRAITS as readonly string[]).includes(trait)).slice(0, 3)
+      : [];
+  } catch { return []; }
+}
 
 const SETTINGS_EXPLANATION = [
   "Use these settings to control how Chromix chats in this server.",
@@ -427,6 +485,86 @@ async function showSettings(interaction: ChatInputCommandInteraction) {
   });
 }
 
+function roleplaySettingsEmbed(settings: Awaited<ReturnType<typeof getSettings>>) {
+  const relationship = ROLEPLAY_RELATIONSHIPS.find(item => item.value === settings.rp_relationship)?.label ?? "No fixed relationship";
+  const intensity = ROLEPLAY_INTENSITIES.find(item => item.value === settings.rp_intensity)?.label ?? "Balanced";
+  const traits = parseRoleplayTraits(settings.rp_traits);
+  return new EmbedBuilder()
+    .setTitle("Chromix Roleplay Settings")
+    .setColor(settings.rp_enabled ? 0x9B59B6 : 0x5865F2)
+    .setDescription(`Roleplay is **${settings.rp_enabled ? "enabled" : "disabled"}**. These preferences are private to you and apply across servers and DMs.\n\nChoose a relationship and up to three traits. Roleplay stays SFW and concise.`)
+    .addFields(
+      { name: "Relationship", value: relationship, inline: true },
+      { name: "Intensity", value: intensity, inline: true },
+      { name: "Traits", value: traits.length ? traits.join(", ") : "None selected", inline: false },
+    );
+}
+
+async function roleplaySettingsComponents(userId: string) {
+  const settings = await getSettings(userId);
+  const relationshipMenu = new StringSelectMenuBuilder()
+    .setCustomId(`rp:${userId}:relationship`).setPlaceholder("Choose relationship")
+    .addOptions(ROLEPLAY_RELATIONSHIPS.map(item => ({ label: item.label, value: item.value, default: item.value === settings.rp_relationship })));
+  const selectedTraits = parseRoleplayTraits(settings.rp_traits);
+  const traitMenu = new StringSelectMenuBuilder()
+    .setCustomId(`rp:${userId}:traits`).setPlaceholder("Choose up to 3 traits")
+    .setMinValues(0).setMaxValues(3)
+    .addOptions(ROLEPLAY_TRAITS.map(value => ({ label: value, value, default: selectedTraits.includes(value) })));
+  const intensityMenu = new StringSelectMenuBuilder()
+    .setCustomId(`rp:${userId}:intensity`).setPlaceholder(`Intensity: ${settings.rp_intensity}`)
+    .addOptions(ROLEPLAY_INTENSITIES.map(item => ({ label: item.label, description: item.description, value: item.value, default: item.value === settings.rp_intensity })));
+  const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`rp:${userId}:toggle`).setLabel(settings.rp_enabled ? "Turn roleplay off" : "Turn roleplay on").setStyle(settings.rp_enabled ? ButtonStyle.Secondary : ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`rp:${userId}:reset`).setLabel("Reset settings").setStyle(ButtonStyle.Danger),
+  );
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(relationshipMenu),
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(traitMenu),
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(intensityMenu),
+    buttons,
+  ];
+}
+
+async function showRoleplaySettings(userId: string) {
+  const settings = await getSettings(userId);
+  const payload = { embeds: [roleplaySettingsEmbed(settings)], components: await roleplaySettingsComponents(userId) };
+  const user = await client.users.fetch(userId);
+  await user.send(payload);
+}
+
+async function handleRoleplaySettingsSelect(interaction: StringSelectMenuInteraction) {
+  const [, ownerId, setting] = interaction.customId.split(":");
+  if (interaction.user.id !== ownerId) throw new Error("Only the person who opened these roleplay settings can change them.");
+  const selected = interaction.values;
+  if (setting === "relationship") {
+    const relationship = selected[0] as RoleplayRelationship;
+    if (!ROLEPLAY_RELATIONSHIPS.some(item => item.value === relationship)) throw new Error("That relationship option is not available.");
+    await updateRoleplaySettings(ownerId, { rp_relationship: relationship });
+  } else if (setting === "traits") {
+    if (selected.length > 3 || selected.some(value => !(ROLEPLAY_TRAITS as readonly string[]).includes(value))) throw new Error("Choose up to three available traits.");
+    await updateRoleplaySettings(ownerId, { rp_traits: JSON.stringify(selected) });
+  } else if (setting === "intensity") {
+    const intensity = selected[0] as RoleplayIntensity;
+    if (!ROLEPLAY_INTENSITIES.some(item => item.value === intensity)) throw new Error("That intensity option is not available.");
+    await updateRoleplaySettings(ownerId, { rp_intensity: intensity });
+  } else return;
+  const settings = await getSettings(ownerId);
+  await interaction.update({ embeds: [roleplaySettingsEmbed(settings)], components: await roleplaySettingsComponents(ownerId) });
+}
+
+async function handleRoleplaySettingsButton(interaction: ButtonInteraction) {
+  const [, ownerId, action] = interaction.customId.split(":");
+  if (interaction.user.id !== ownerId) throw new Error("Only the person who opened these roleplay settings can change them.");
+  const settings = await getSettings(ownerId);
+  if (action === "toggle") {
+    await updateRoleplaySettings(ownerId, { rp_enabled: settings.rp_enabled ? 0 : 1 });
+  } else if (action === "reset") {
+    await updateRoleplaySettings(ownerId, { rp_enabled: 0, rp_relationship: "none", rp_traits: "[]", rp_intensity: "balanced" });
+  } else return;
+  const updated = await getSettings(ownerId);
+  await interaction.update({ embeds: [roleplaySettingsEmbed(updated)], components: await roleplaySettingsComponents(ownerId) });
+}
+
 async function personaMenu(userId: string, guildId?: string) {
   const settings = await getSettings(userId, guildId);
   return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
@@ -438,9 +576,9 @@ async function personaMenu(userId: string, guildId?: string) {
 function helpEmbed() {
   return new EmbedBuilder().setTitle("AI Bot Help").setColor(0x5865F2).setDescription("Chat using `/chat`, `c.chat <message>`, mentioning me, or replying to one of my messages.")
     .addFields(
-      { name: "Settings", value: "`/settings` or `c.settings` — configure provider, model, response length, safety, instructions, and persona.\n`/persona` — quickly choose or write a custom persona." },
-      { name: "History", value: "`/clear` removes history in this channel. Thread chats get their own persistent conversation history. `/reset` also resets your settings. `/delete-my-data` removes stored data but keeps VIP." },
-      { name: "Limits", value: "8 prompts per minute, with a 5-second cooldown. VIP users receive 12 history messages; others receive 5." },
+      { name: "Settings", value: "`/settings` or `c.settings` — configure provider, model, response length, safety, instructions, and persona. `c.rpsettings` opens private SFW roleplay controls.\n`/persona` — quickly choose or write a custom persona." },
+      { name: "History", value: "`/clear` removes history in this channel. When you refer to recent channel context, Chromix can look up up to 20 earlier messages. Thread chats get their own persistent conversation history. `/reset` also resets your settings. `/delete-my-data` removes stored data but keeps VIP." },
+      { name: "Limits", value: "8 prompts per minute, with a 5-second cooldown. Attachment analysis allows 3 uploads per rolling hour for free users and 10 for VIP. VIP users receive 12 history messages; others receive 5." },
       { name: "Image generation", value: "Ask me to create an image in a server chat. Each server can generate 3 images every 15 minutes and 50 per UTC day. Image generation is unavailable in DMs." },
       { name: "Games", value: "Ask me to play Rock, Paper, Scissors or Tic-Tac-Toe. In Tic-Tac-Toe, you are X and Chromix is O; choose a square to make a move." },
       { name: "Polls and timers", value: "Ask me to create a poll now or later, or start a countdown timer. Timers show a live Discord relative timestamp and post a notice when they finish." },
@@ -515,6 +653,12 @@ async function sendChatFromMessage(message: Message, prompt: string, referenceId
   await runChat({
     prompt, adminChat, user: message.author, member: message.member, guildId: message.guildId ?? undefined,
     guildName: message.guild?.name, channel: message.channel, channelId: message.channelId,
+    attachments: message.attachments.map(attachment => ({
+      name: attachment.name,
+      url: attachment.url,
+      contentType: attachment.contentType ?? null,
+      size: attachment.size,
+    })),
     messageTimestamp: message.createdTimestamp,
     sourceMessageId: message.id, referencedMessageId: referenceId,
     reply: content => message.reply({ content, allowedMentions: { repliedUser: false } }),
@@ -617,8 +761,10 @@ client.on(Events.MessageCreate, async message => {
       await handleDeleteMyDataCommand(messageCommandContext(message));
       return;
     }
-    if (command === `${prefix}give-vip`) {
-      await handleVipCommand(messageCommandContext(message, { recipient: message.mentions.users.first() ?? undefined }), true);
+    if (command === `${prefix}givevip`) {
+      const durationText = content.slice(firstCommand.length).replace(/<@!?\d+>/gu, " ").trim();
+      const durationSeconds = parseVipDuration(durationText);
+      await handleVipCommand(messageCommandContext(message, { recipient: message.mentions.users.first() ?? undefined }), true, durationSeconds ?? undefined);
       return;
     }
     if (command === `${prefix}remove-vip`) {
@@ -639,6 +785,21 @@ client.on(Events.MessageCreate, async message => {
         components: await settingsComponents("persona", message.author.id, message.guildId ?? undefined),
         allowedMentions: { repliedUser: false },
       });
+      return;
+    }
+    if (command === `${prefix}rpsettings`) {
+      const settings = await getSettings(message.author.id);
+      const payload = { embeds: [roleplaySettingsEmbed(settings)], components: await roleplaySettingsComponents(message.author.id) };
+      if (message.guildId) {
+        try {
+          await showRoleplaySettings(message.author.id);
+          await message.reply({ content: "I sent your roleplay settings in a DM.", allowedMentions: { repliedUser: false } });
+        } catch {
+          await message.reply({ content: "I couldn't DM you. Enable direct messages from server members, then try `c.rpsettings` again.", allowedMentions: { repliedUser: false } });
+        }
+      } else {
+        await message.reply(payload);
+      }
       return;
     }
     if ([`${prefix}listen`, `${prefix}ignore`].includes(command.split(/\s+/)[0])) {
@@ -698,11 +859,6 @@ client.on(Events.InteractionCreate, async interaction => {
       }
       if (command === "delete-my-data") {
         await handleDeleteMyDataCommand(interactionCommandContext(interaction));
-        return;
-      }
-      if (command === "give-vip") {
-        const recipient = interaction.options.getUser("user", true);
-        await handleVipCommand(interactionCommandContext(interaction, { recipient }), true);
         return;
       }
       if (command === "remove-vip") {
@@ -777,9 +933,14 @@ client.on(Events.InteractionCreate, async interaction => {
     }
     if (interaction.isStringSelectMenu()) {
       if (interaction.customId.startsWith("poll:vote:")) await handlePollVote(interaction);
+      else if (interaction.customId.startsWith("rp:")) await handleRoleplaySettingsSelect(interaction);
       else await handleSettingSelect(interaction);
     }
     if (interaction.isButton()) {
+      if (interaction.customId.startsWith("rp:")) {
+        await handleRoleplaySettingsButton(interaction);
+        return;
+      }
       if (interaction.customId.startsWith("giveaway:")) {
         await handleGiveawayButton(interaction);
         return;
