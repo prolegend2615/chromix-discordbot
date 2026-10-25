@@ -4,6 +4,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
+  MessageFlags,
   type ButtonInteraction,
   type Message,
 } from "discord.js";
@@ -106,15 +107,15 @@ export async function handleTicTacToeButton(interaction: ButtonInteraction): Pro
   const game = activeGames.get(messageId);
   if (!game || game.expiresAt <= Date.now()) {
     if (game) clearGame(messageId, game);
-    await interaction.reply({ content: "This game has expired. Ask me to start another one.", ephemeral: true });
+    await interaction.reply({ content: "This game has expired. Ask me to start another one.", flags: MessageFlags.Ephemeral });
     return;
   }
   if (interaction.user.id !== game.ownerId) {
-    await interaction.reply({ content: "Only the person who started this game can play.", ephemeral: true });
+    await interaction.reply({ content: "Only the person who started this game can play.", flags: MessageFlags.Ephemeral });
     return;
   }
   if (game.processing) {
-    await interaction.reply({ content: "Your previous move is still processing. Try again in a moment.", ephemeral: true });
+    await interaction.reply({ content: "Your previous move is still processing. Try again in a moment.", flags: MessageFlags.Ephemeral });
     return;
   }
 
@@ -135,12 +136,12 @@ export async function handleTicTacToeButton(interaction: ButtonInteraction): Pro
 
   const moveIndex = /^ttt:move:([0-8])$/.exec(interaction.customId)?.[1];
   if (moveIndex === undefined) {
-    await interaction.reply({ content: "That game button is not valid.", ephemeral: true });
+    await interaction.reply({ content: "That game button is not valid.", flags: MessageFlags.Ephemeral });
     return;
   }
   const playerMove = Number(moveIndex);
   if (game.board[playerMove] !== null) {
-    await interaction.reply({ content: "That square is already taken. Choose an empty square.", ephemeral: true });
+    await interaction.reply({ content: "That square is already taken. Choose an empty square.", flags: MessageFlags.Ephemeral });
     return;
   }
 

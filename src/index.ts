@@ -1,6 +1,6 @@
 import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, Events, GatewayIntentBits, ModalBuilder,
-  PermissionsBitField, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder,
+  MessageFlags, PermissionsBitField, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder,
   type ButtonInteraction, type ChatInputCommandInteraction, type Message, type MessageCreateOptions, type StringSelectMenuInteraction, type User,
 } from "discord.js";
 import { config } from "./config.js";
@@ -152,7 +152,7 @@ function startReminderScheduler() {
 
 async function handlePollVote(interaction: StringSelectMenuInteraction) {
   if (await isUserBlacklisted(interaction.user.id)) {
-    await interaction.reply({ content: "You are blacklisted and cannot use bot commands.", ephemeral: true });
+    await interaction.reply({ content: "You are blacklisted and cannot use bot commands.", flags: MessageFlags.Ephemeral });
     return;
   }
   const [, , rawId] = interaction.customId.split(":");
@@ -165,25 +165,25 @@ async function handlePollVote(interaction: StringSelectMenuInteraction) {
 
 async function handleGiveawayButton(interaction: ButtonInteraction) {
   if (await isUserBlacklisted(interaction.user.id)) {
-    await interaction.reply({ content: "You are blacklisted and cannot use bot commands.", ephemeral: true });
+    await interaction.reply({ content: "You are blacklisted and cannot use bot commands.", flags: MessageFlags.Ephemeral });
     return;
   }
   const match = /^giveaway:(join|leave):(\d+)$/.exec(interaction.customId);
   const giveawayId = Number(match?.[2]);
   if (!match || !Number.isSafeInteger(giveawayId) || giveawayId <= 0 || !interaction.guild) {
-    await interaction.reply({ content: "That giveaway could not be found.", ephemeral: true });
+    await interaction.reply({ content: "That giveaway could not be found.", flags: MessageFlags.Ephemeral });
     return;
   }
   const giveaway = await getGiveaway(giveawayId);
   if (!giveaway || giveaway.guild_id !== interaction.guildId) {
-    await interaction.reply({ content: "That giveaway could not be found in this server.", ephemeral: true });
+    await interaction.reply({ content: "That giveaway could not be found in this server.", flags: MessageFlags.Ephemeral });
     return;
   }
 
   if (match[1] === "join" && giveaway.required_role_id) {
     const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
     if (!member?.roles.cache.has(giveaway.required_role_id)) {
-      await interaction.reply({ content: `You need the <@&${giveaway.required_role_id}> role to join this giveaway.`, ephemeral: true });
+      await interaction.reply({ content: `You need the <@&${giveaway.required_role_id}> role to join this giveaway.`, flags: MessageFlags.Ephemeral });
       return;
     }
   }
@@ -192,20 +192,20 @@ async function handleGiveawayButton(interaction: ButtonInteraction) {
     ? await joinGiveaway(giveawayId, interaction.user.id)
     : await leaveGiveaway(giveawayId, interaction.user.id);
   if (result === "closed" || result === "missing") {
-    await interaction.reply({ content: "This giveaway has ended or is no longer available.", ephemeral: true });
+    await interaction.reply({ content: "This giveaway has ended or is no longer available.", flags: MessageFlags.Ephemeral });
     return;
   }
   if (result === "already_joined") {
-    await interaction.reply({ content: "You’re already entered in this giveaway.", ephemeral: true });
+    await interaction.reply({ content: "You’re already entered in this giveaway.", flags: MessageFlags.Ephemeral });
     return;
   }
   if (result === "not_entered") {
-    await interaction.reply({ content: "You haven’t joined this giveaway.", ephemeral: true });
+    await interaction.reply({ content: "You haven’t joined this giveaway.", flags: MessageFlags.Ephemeral });
     return;
   }
   const currentGiveaway = await getGiveaway(giveawayId);
   if (!currentGiveaway) {
-    await interaction.reply({ content: "This giveaway is no longer available.", ephemeral: true });
+    await interaction.reply({ content: "This giveaway is no longer available.", flags: MessageFlags.Ephemeral });
     return;
   }
   await interaction.update(await buildGiveawayPayload(currentGiveaway));
@@ -262,7 +262,10 @@ function interactionCommandContext(interaction: ChatInputCommandInteraction, ove
     member: permissionBits === undefined ? null : { permissions: new PermissionsBitField(permissionBits) },
     ephemeral: true,
     ...overrides,
-    reply: payload => interaction.reply(payload as Parameters<ChatInputCommandInteraction["reply"]>[0]),
+    reply: payload => {
+      const { ephemeral, ...messagePayload } = payload;
+      return interaction.reply({ ...messagePayload, ...(ephemeral ? { flags: MessageFlags.Ephemeral } : {}) } as Parameters<ChatInputCommandInteraction["reply"]>[0]);
+    },
   };
 }
 
@@ -481,7 +484,7 @@ async function showSettings(interaction: ChatInputCommandInteraction) {
   await interaction.reply({
     embeds: [settingsEmbed("persona")],
     components: await settingsComponents("persona", interaction.user.id, interaction.guildId ?? undefined),
-    ephemeral: true,
+    flags: MessageFlags.Ephemeral,
   });
 }
 
@@ -494,6 +497,7 @@ function roleplaySettingsEmbed(settings: Awaited<ReturnType<typeof getSettings>>
     .setColor(settings.rp_enabled ? 0x9B59B6 : 0x5865F2)
     .setDescription(`Roleplay is **${settings.rp_enabled ? "enabled" : "disabled"}**. These preferences are private to you and apply across servers and DMs.\n\nChoose a relationship and up to three traits. Roleplay stays SFW and concise.`)
     .addFields(
+      { name: "Character name", value: settings.rp_name || "Chromix", inline: true },
       { name: "Relationship", value: relationship, inline: true },
       { name: "Intensity", value: intensity, inline: true },
       { name: "Traits", value: traits.length ? traits.join(", ") : "None selected", inline: false },
@@ -515,6 +519,7 @@ async function roleplaySettingsComponents(userId: string) {
     .addOptions(ROLEPLAY_INTENSITIES.map(item => ({ label: item.label, description: item.description, value: item.value, default: item.value === settings.rp_intensity })));
   const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(`rp:${userId}:toggle`).setLabel(settings.rp_enabled ? "Turn roleplay off" : "Turn roleplay on").setStyle(settings.rp_enabled ? ButtonStyle.Secondary : ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`rp:${userId}:name`).setLabel("Set character name").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`rp:${userId}:reset`).setLabel("Reset settings").setStyle(ButtonStyle.Danger),
   );
   return [
@@ -556,10 +561,16 @@ async function handleRoleplaySettingsButton(interaction: ButtonInteraction) {
   const [, ownerId, action] = interaction.customId.split(":");
   if (interaction.user.id !== ownerId) throw new Error("Only the person who opened these roleplay settings can change them.");
   const settings = await getSettings(ownerId);
-  if (action === "toggle") {
+  if (action === "name") {
+    const modal = new ModalBuilder().setCustomId(`rp:${ownerId}:name-modal`).setTitle("Set roleplay character name");
+    const input = new TextInputBuilder().setCustomId("rp-name").setLabel("Name Chromix should use").setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(32).setValue(settings.rp_name).setPlaceholder("Leave blank to use Chromix");
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
+    await interaction.showModal(modal);
+    return;
+  } else if (action === "toggle") {
     await updateRoleplaySettings(ownerId, { rp_enabled: settings.rp_enabled ? 0 : 1 });
   } else if (action === "reset") {
-    await updateRoleplaySettings(ownerId, { rp_enabled: 0, rp_relationship: "none", rp_traits: "[]", rp_intensity: "balanced" });
+    await updateRoleplaySettings(ownerId, { rp_enabled: 0, rp_relationship: "none", rp_traits: "[]", rp_intensity: "balanced", rp_name: "" });
   } else return;
   const updated = await getSettings(ownerId);
   await interaction.update({ embeds: [roleplaySettingsEmbed(updated)], components: await roleplaySettingsComponents(ownerId) });
@@ -576,7 +587,7 @@ async function personaMenu(userId: string, guildId?: string) {
 function helpEmbed() {
   return new EmbedBuilder().setTitle("AI Bot Help").setColor(0x5865F2).setDescription("Chat using `/chat`, `c.chat <message>`, mentioning me, or replying to one of my messages.")
     .addFields(
-      { name: "Settings", value: "`/settings` or `c.settings` — configure provider, model, response length, safety, instructions, and persona. `c.rpsettings` opens private SFW roleplay controls.\n`/persona` — quickly choose or write a custom persona." },
+      { name: "Settings", value: "`/settings` or `c.settings` — configure provider, model, response length, safety, instructions, and persona. `c.rpsettings` opens private SFW roleplay controls, including a custom character name.\n`/persona` — quickly choose or write a custom persona." },
       { name: "History", value: "`/clear` removes history in this channel. When you refer to recent channel context, Chromix can look up up to 20 earlier messages. Thread chats get their own persistent conversation history. `/reset` also resets your settings. `/delete-my-data` removes stored data but keeps VIP." },
       { name: "Limits", value: "8 prompts per minute, with a 5-second cooldown. Attachment analysis allows 3 uploads per rolling hour for free users and 10 for VIP. VIP users receive 12 history messages; others receive 5." },
       { name: "Image generation", value: "Ask me to create an image in a server chat. Each server can generate 3 images every 15 minutes and 50 per UTC day. Image generation is unavailable in DMs." },
@@ -840,13 +851,13 @@ client.on(Events.InteractionCreate, async interaction => {
   try {
     if (interaction.isChatInputCommand()) {
       if (await isUserBlacklisted(interaction.user.id)) {
-        await interaction.reply({ content: "You are blacklisted and cannot use bot commands.", ephemeral: true });
+        await interaction.reply({ content: "You are blacklisted and cannot use bot commands.", flags: MessageFlags.Ephemeral });
         return;
       }
       const command = interaction.commandName;
       if (command === "settings") return await showSettings(interaction);
       if (command === "help") {
-        await interaction.reply({ embeds: [helpEmbed()], ephemeral: true });
+        await interaction.reply({ embeds: [helpEmbed()], flags: MessageFlags.Ephemeral });
         return;
       }
       if (command === "status") {
@@ -947,7 +958,7 @@ client.on(Events.InteractionCreate, async interaction => {
       }
       if (interaction.customId.startsWith("rps:") || interaction.customId.startsWith("ttt:")) {
         if (await isUserBlacklisted(interaction.user.id)) {
-          await interaction.reply({ content: "You are blacklisted and cannot use bot commands.", ephemeral: true });
+          await interaction.reply({ content: "You are blacklisted and cannot use bot commands.", flags: MessageFlags.Ephemeral });
           return;
         }
         if (interaction.customId.startsWith("rps:")) await handleRockPaperScissorsButton(interaction);
@@ -958,7 +969,7 @@ client.on(Events.InteractionCreate, async interaction => {
     }
     if (interaction.isModalSubmit() && interaction.customId === "settings:prompt-modal") {
       updateSettings(interaction.user.id, interaction.guildId ?? undefined, { custom_system_prompt: interaction.fields.getTextInputValue("custom-prompt").trim() });
-      await interaction.reply({ content: "Custom instructions saved.", ephemeral: true });
+      await interaction.reply({ content: "Custom instructions saved.", flags: MessageFlags.Ephemeral });
     }
     if (interaction.isModalSubmit() && interaction.customId === "settings:persona-modal") {
       const customPersona = interaction.fields.getTextInputValue("custom-persona").trim();
@@ -967,13 +978,26 @@ client.on(Events.InteractionCreate, async interaction => {
       await updateSettings(interaction.user.id, interaction.guildId ?? undefined, customPersona
         ? { persona: "Custom", custom_persona: customPersona }
         : { persona: "Default", custom_persona: "" });
-      await interaction.reply({ content: customPersona ? "Custom persona saved." : "Custom persona cleared; using Default.", ephemeral: true });
+      await interaction.reply({ content: customPersona ? "Custom persona saved." : "Custom persona cleared; using Default.", flags: MessageFlags.Ephemeral });
+    }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith("rp:") && interaction.customId.endsWith(":name-modal")) {
+      const [, ownerId] = interaction.customId.split(":");
+      if (interaction.user.id !== ownerId) throw new Error("Only the person who opened these roleplay settings can change them.");
+      const name = interaction.fields.getTextInputValue("rp-name")
+        .replace(/<[@#][!&]?\d+>/gu, "")
+        .replace(/@(everyone|here)/giu, "")
+        .replace(/[\u0000-\u001f\u007f]/gu, "")
+        .replace(/\s+/gu, " ")
+        .trim()
+        .slice(0, 32);
+      await updateRoleplaySettings(ownerId, { rp_name: name });
+      await interaction.reply({ content: name ? `Your roleplay character name is now ${name}.` : "Your roleplay character name was reset to Chromix.", flags: MessageFlags.Ephemeral });
     }
   } catch (error) {
     const text = error instanceof Error ? error.message : "Something went wrong.";
     if (interaction.isRepliable()) {
-      if (interaction.replied || interaction.deferred) await interaction.followUp({ content: text, ephemeral: true });
-      else await interaction.reply({ content: text, ephemeral: true });
+      if (interaction.replied || interaction.deferred) await interaction.followUp({ content: text, flags: MessageFlags.Ephemeral });
+      else await interaction.reply({ content: text, flags: MessageFlags.Ephemeral });
     }
   }
 });

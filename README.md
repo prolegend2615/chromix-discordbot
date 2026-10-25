@@ -21,7 +21,7 @@ Edit [`system-instructions.txt`](system-instructions.txt) to control how the AI 
 - `c.chat <message>` / `/chat`
 - Mention the bot or reply to one of its messages
 - `c.settings` / `/settings`
-- `c.rpsettings` (opens private SFW roleplay settings; roleplay is off by default)
+- `c.rpsettings` (opens private SFW roleplay settings; set a character name; roleplay is off by default)
 - `/help`, `/status`, `/persona`
 - `c.clear` / `/clear`
 - `c.reset` / `/reset`
