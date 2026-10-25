@@ -32,7 +32,7 @@ Edit [`system-instructions.txt`](system-instructions.txt) to control how the AI 
 
 In admin chat, ask Chromix to build several categories and channels in one prompt. It creates categories first and assigns channels during creation, uses colorful Unicode emoji names such as `💬┃general` by default, and tracks channel-creation calls in SQLite to stay within the configured limit of 10 creations per rolling 10 minutes. If that limit is full, it shows a status and waits for the next slot.
 
-Administrators can also start giveaways with `c.admin`, for example: `start a giveaway for a Nitro gift, ending in 1 day, with 2 winners; only members with the VIP role can enter`. Chromix posts a styled embed with join/leave buttons, a live entry count, Discord end-time timestamps, optional role eligibility, and an automatic winner draw. Giveaway entries and end times are stored in SQLite and survive bot restarts.
+Administrators can also create colored roles with `c.admin` (Chromix chooses a fitting hex color if none is specified), and start giveaways with `c.admin`, for example: `start a giveaway for a Nitro gift, ending in 1 day, with 2 winners; only members with the VIP role can enter`. Chromix posts a styled embed with join/leave buttons, a live entry count, Discord end-time timestamps, optional role eligibility, and an automatic winner draw. Giveaway entries and end times are stored in SQLite and survive bot restarts.
 
 ## AI actions (through chat)
 

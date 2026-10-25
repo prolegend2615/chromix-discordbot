@@ -336,7 +336,8 @@ export async function runChat(args: {
                     : samSpeakCommand ? "🔊 Generating your voice message…"
                       : rockPaperScissorsCommand || ticTacToeCommand ? "Starting your game…"
                         : giveawayCommand ? "🎉 Setting up the giveaway…"
-                        : channelManagementCommand?.action === "create_layout" ? "Building your server layout…"
+                        : channelManagementCommand?.action === "create_role" ? "Creating the server role…"
+                          : channelManagementCommand?.action === "create_layout" ? "Building your server layout…"
                           : channelManagementCommand ? "Updating the server…"
                           : "I couldn't use that tool request. Please try again.";
       await streamingEditor.reset(actionStatus).catch(() => undefined);

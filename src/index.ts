@@ -446,7 +446,7 @@ function helpEmbed() {
       { name: "Polls and timers", value: "Ask me to create a poll now or later, or start a countdown timer. Timers show a live Discord relative timestamp and post a notice when they finish." },
       { name: "Scheduled messages", value: "Ask me to write and schedule a message in this channel, up to 30 days ahead. Scheduled posts do not trigger role or everyone mentions." },
       { name: "Server details", value: "Ask about member and channel counts, the highest role, or the server owner. I use Discord's cached server data; counts can lag until Discord updates the bot." },
-      { name: "Server admins", value: "`c.admin <request>` (or `c.adminchat <request>`) creates and manages text channels/categories and starts giveaways with join/leave buttons. Giveaways support a required role, winner count, and automatic draw at the end time. `/listen` and `/ignore` control which channels allow the bot." },
+      { name: "Server admins", value: "`c.admin <request>` (or `c.adminchat <request>`) creates colored roles and manages text channels/categories, and starts giveaways with join/leave buttons. Giveaways support a required role, winner count, and automatic draw at the end time. `/listen` and `/ignore` control which channels allow the bot." },
     );
 }
 

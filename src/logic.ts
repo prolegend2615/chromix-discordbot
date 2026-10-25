@@ -74,7 +74,7 @@ export function readToolActionArguments(text: string, name: string, argumentCoun
 }
 
 export function hasToolAction(text: string): boolean {
-  return /\buse\s+(?:set_afk|set_reminder|sam_speak|show_avatar|generate_image|create_poll|set_timer|schedule_message|create_giveaway|create_channel|create_category|create_layout|delete_channel|delete_category|view_channels|rock_paper_scissors|tic_tac_toe|search_(?:brave|exa))\b/i.test(text);
+  return /\buse\s+(?:set_afk|set_reminder|sam_speak|show_avatar|generate_image|create_poll|set_timer|schedule_message|create_giveaway|create_role|create_channel|create_category|create_layout|delete_channel|delete_category|view_channels|rock_paper_scissors|tic_tac_toe|search_(?:brave|exa))\b/i.test(text);
 }
 
 export type CreateGiveawayCommand = {
@@ -398,6 +398,7 @@ export function getTicTacToeBotMoves(board: TicTacToeBoard): number[] {
 // --- Channel Management Action ---
 
 export type ChannelManagementCommand =
+  | { action: "create_role"; name: string; color: string }
   | { action: "create_channel"; name: string; categoryId?: string }
   | { action: "create_category"; name: string }
   | { action: "create_layout"; groups: Array<{ categoryName?: string; channels: string[] }> }
@@ -417,6 +418,14 @@ export function hasChannelManagementIntent(text: string): boolean {
  *  - `use delete_category (categoryId)`
  */
 export function parseChannelManagementCommand(text: string): ChannelManagementCommand | null {
+  let match = /^\s*use\s+create_role\s*\(([\s\S]*?)\)\s*\(([\s\S]*?)\)\s*$/i.exec(text);
+  if (match) {
+    const name = match[1]?.trim().replace(/\s+/gu, " ");
+    const color = match[2]?.trim();
+    if (!name || name.length > 100 || /[\r\n\u0000-\u001f]/u.test(name) || !color || !/^#?[\da-f]{6}$/i.test(color)) return null;
+    return { action: "create_role", name, color: color.startsWith("#") ? color.toUpperCase() : `#${color.toUpperCase()}` };
+  }
+
   const layoutArgs = readAction(text, "create_layout");
   if (layoutArgs) {
     if (layoutArgs.length < 2 || layoutArgs.length % 2 !== 0) return null;
@@ -433,7 +442,7 @@ export function parseChannelManagementCommand(text: string): ChannelManagementCo
   }
 
   // Create channel: use create_channel (name) or use create_channel (name) (categoryId)
-  let match = /^\s*use\s+create_channel\s*\(([\s\S]*?)\)\s*(?:\(([\s\S]*?)\))?\s*$/i.exec(text);
+  match = /^\s*use\s+create_channel\s*\(([\s\S]*?)\)\s*(?:\(([\s\S]*?)\))?\s*$/i.exec(text);
   if (match) {
     const name = match[1]?.trim();
     const categoryId = match[2]?.trim();
