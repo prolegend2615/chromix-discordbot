@@ -1167,21 +1167,21 @@ client.on(Events.MessageCreate, async message => {
       await handleDeleteMyDataCommand(messageCommandContext(message));
       return;
     }
-    if (command === `${prefix}givevip`) {
+    if (isPrefixCommand(content, "givevip")) {
       const durationText = content.slice(firstCommand.length).replace(/<@!?\d+>/gu, " ").trim();
       const durationSeconds = parseVipDuration(durationText);
       await handleVipCommand(messageCommandContext(message, { recipient: message.mentions.users.first() ?? undefined }), true, durationSeconds ?? undefined);
       return;
     }
-    if (command === `${prefix}remove-vip`) {
+    if (isPrefixCommand(content, "remove-vip")) {
       await handleVipCommand(messageCommandContext(message, { recipient: message.mentions.users.first() ?? undefined }), false);
       return;
     }
-    if (command === `${prefix}blacklist`) {
+    if (isPrefixCommand(content, "blacklist")) {
       await handleBlacklistCommand(messageCommandContext(message, { recipient: message.mentions.users.first() ?? undefined }), true);
       return;
     }
-    if (command === `${prefix}unblacklist`) {
+    if (isPrefixCommand(content, "unblacklist")) {
       await handleBlacklistCommand(messageCommandContext(message, { recipient: message.mentions.users.first() ?? undefined }), false);
       return;
     }
