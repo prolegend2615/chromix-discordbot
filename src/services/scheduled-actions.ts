@@ -1,8 +1,8 @@
 import { dbPromise } from "../database.js";
 
 export const MAX_SCHEDULE_SECONDS = 30 * 24 * 60 * 60;
-export type ScheduledPost = { id: number; channel_id: string; creator_id: string; content: string; scheduled_at: number };
-export type Timer = { id: number; channel_id: string; creator_id: string; label: string; due_at: number };
+export type ScheduledPost = { id: number; guild_id?: string; channel_id: string; creator_id: string; content: string; scheduled_at: number; delivery_attempts: number; retry_at: number | null; last_error: string | null };
+export type Timer = { id: number; channel_id: string; creator_id: string; label: string; due_at: number; delivery_attempts: number; retry_at: number | null; last_error: string | null };
 
 export function parseScheduleDuration(value: string): number | null {
   const match = /^\s*(\d+)\s*([smhd])\s*$/i.exec(value);
@@ -29,7 +29,7 @@ export async function createScheduledPost(input: { guildId: string; channelId: s
 }
 
 export async function getDueScheduledPosts(now = Date.now()): Promise<ScheduledPost[]> {
-  return (await dbPromise).all<ScheduledPost[]>("SELECT id,channel_id,creator_id,content,scheduled_at FROM scheduled_posts WHERE status='scheduled' AND scheduled_at<=? ORDER BY scheduled_at,id", now);
+  return (await dbPromise).all<ScheduledPost[]>("SELECT id,guild_id,channel_id,creator_id,content,scheduled_at,delivery_attempts,retry_at,last_error FROM scheduled_posts WHERE status='scheduled' AND scheduled_at<=? AND (retry_at IS NULL OR retry_at<=?) ORDER BY scheduled_at,id", now, now);
 }
 
 export async function markScheduledPostSent(id: number) {
@@ -47,9 +47,50 @@ export async function createTimer(input: { channelId: string; creatorId: string;
 }
 
 export async function getDueTimers(now = Date.now()): Promise<Timer[]> {
-  return (await dbPromise).all<Timer[]>("SELECT id,channel_id,creator_id,label,due_at FROM timers WHERE due_at<=? ORDER BY due_at,id", now);
+  return (await dbPromise).all<Timer[]>("SELECT id,channel_id,creator_id,label,due_at,delivery_attempts,retry_at,last_error FROM timers WHERE due_at<=? AND (retry_at IS NULL OR retry_at<=?) ORDER BY due_at,id", now, now);
 }
 
 export async function deleteTimer(id: number) {
   await (await dbPromise).run("DELETE FROM timers WHERE id=?", id);
+}
+
+export async function getUserScheduledPosts(userId: string) {
+  return (await dbPromise).all<ScheduledPost[]>("SELECT id,guild_id,channel_id,creator_id,content,scheduled_at,delivery_attempts,retry_at,last_error FROM scheduled_posts WHERE creator_id=? AND status='scheduled' ORDER BY scheduled_at", userId);
+}
+
+export async function deleteScheduledPost(id: number, userId: string) {
+  const result = await (await dbPromise).run("UPDATE scheduled_posts SET status='cancelled' WHERE id=? AND creator_id=? AND status='scheduled'", id, userId);
+  return result.changes === 1;
+}
+
+export async function getUserTimers(userId: string) {
+  return (await dbPromise).all<Timer[]>("SELECT id,channel_id,creator_id,label,due_at,delivery_attempts,retry_at,last_error FROM timers WHERE creator_id=? ORDER BY due_at", userId);
+}
+
+export async function deleteUserTimer(id: number, userId: string) {
+  const result = await (await dbPromise).run("DELETE FROM timers WHERE id=? AND creator_id=?", id, userId);
+  return result.changes === 1;
+}
+
+async function markFailure(kind: "scheduled_message" | "timer", id: number, guildId: string, creatorId: string, attempts: number, error: unknown) {
+  const db = await dbPromise;
+  const next = attempts + 1;
+  const message = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+  if (next >= 3) {
+    await db.run("INSERT INTO scheduled_delivery_failures(kind,action_id,guild_id,creator_id,error,created_at) VALUES(?,?,?,?,?,?)", kind, id, guildId, creatorId, message, Date.now());
+    if (kind === "timer") await db.run("DELETE FROM timers WHERE id=?", id);
+    else await db.run("UPDATE scheduled_posts SET status='failed',last_error=? WHERE id=?", message, id);
+    return { failed: true, attempts: next };
+  }
+  const table = kind === "timer" ? "timers" : "scheduled_posts";
+  await db.run(`UPDATE ${table} SET delivery_attempts=?,retry_at=?,last_error=? WHERE id=?`, next, Date.now() + 60_000, message, id);
+  return { failed: false, attempts: next };
+}
+
+export async function markScheduledPostDeliveryFailure(post: ScheduledPost, error: unknown) {
+  return markFailure("scheduled_message", post.id, post.guild_id ?? "", post.creator_id, post.delivery_attempts ?? 0, error);
+}
+
+export async function markTimerDeliveryFailure(timer: Timer, error: unknown) {
+  return markFailure("timer", timer.id, "", timer.creator_id, timer.delivery_attempts ?? 0, error);
 }

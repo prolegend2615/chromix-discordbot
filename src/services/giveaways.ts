@@ -5,8 +5,10 @@ import {
   ButtonStyle,
   EmbedBuilder,
   type Guild,
+  type GuildMember,
 } from "discord.js";
 import { dbPromise } from "../database.js";
+import { getGuildConfig, updateGuildConfig } from "./guild-config.js";
 
 export type Giveaway = {
   id: number;
@@ -170,6 +172,47 @@ export async function markGiveawayEnded(id: number) {
   );
 }
 
+export async function setGiveawayManagerRole(guildId: string, role: { id: string; name: string } | null) {
+  await updateGuildConfig(guildId, { giveaway_manager_role_id: role?.id ?? null, giveaway_manager_role_name: role?.name ?? null });
+}
+
+export async function canManageGiveaways(guildId: string, member: GuildMember | null) {
+  if (!member) return false;
+  const config = await getGuildConfig(guildId);
+  if (!config.giveaway_manager_role_id) return false;
+  if (member.permissions.has("Administrator")) return true;
+  return Boolean(config.giveaway_manager_role_id && member.roles?.cache.has(config.giveaway_manager_role_id));
+}
+
+export async function cancelGiveaway(id: number) {
+  const result = await (await dbPromise).run("UPDATE giveaways SET status='cancelled',ended_at=? WHERE id=? AND status IN ('publishing','active','drawing')", Date.now(), id);
+  return result.changes === 1;
+}
+
+export async function rerollGiveaway(id: number) {
+  const db = await dbPromise;
+  const giveaway = await getGiveaway(id);
+  if (!giveaway || giveaway.status !== "ended") return null;
+  const entries = await db.all<{ user_id: string }[]>("SELECT user_id FROM giveaway_entries WHERE giveaway_id=? ORDER BY joined_at,user_id", id);
+  const previous = new Set(giveaway.winner_ids_json ? JSON.parse(giveaway.winner_ids_json) as string[] : []);
+  const pool = entries.filter(entry => !previous.has(entry.user_id));
+  const winners: string[] = [];
+  for (let index = 0; index < Math.min(giveaway.winner_count, pool.length); index += 1) winners.push(pool.splice(randomInt(pool.length), 1)[0].user_id);
+  await db.run("UPDATE giveaways SET winner_ids_json=?,ended_at=? WHERE id=? AND status='ended'", JSON.stringify(winners), Date.now(), id);
+  return getGiveaway(id);
+}
+
+export async function editGiveaway(id: number, changes: { prize?: string; endsAt?: number; winnerCount?: number }) {
+  const giveaway = await getGiveaway(id);
+  if (!giveaway || giveaway.status !== "active") return null;
+  const prize = changes.prize?.trim().replace(/\s+/gu, " ").slice(0, 200) ?? giveaway.prize;
+  const endsAt = changes.endsAt ?? giveaway.ends_at;
+  const winnerCount = changes.winnerCount ?? giveaway.winner_count;
+  if (!prize || endsAt <= Date.now() || !Number.isInteger(winnerCount) || winnerCount < 1 || winnerCount > 20) throw new Error("That giveaway edit is invalid.");
+  await (await dbPromise).run("UPDATE giveaways SET prize=?,ends_at=?,winner_count=? WHERE id=? AND status='active'", prize, endsAt, winnerCount, id);
+  return getGiveaway(id);
+}
+
 export async function buildGiveawayPayload(giveaway: Giveaway, forceOpen = false) {
   const isOpen = forceOpen || giveaway.status === "active";
   const endTimestamp = Math.floor(giveaway.ends_at / 1000);
@@ -183,6 +226,8 @@ export async function buildGiveawayPayload(giveaway: Giveaway, forceOpen = false
     .setTitle(`${isOpen ? "🎁" : "🎉"} ${giveaway.prize}`)
     .setDescription(isOpen
       ? `A special drop for this server.\n\n**Hosted by** ${host}`
+      : giveaway.status === "cancelled"
+        ? "This giveaway was cancelled by a manager."
       : winnerMentions.length
         ? `**Winner${winnerMentions.length === 1 ? "" : "s"}:** ${winnerMentions.join(", ")}\n\nCongratulations!`
         : "No eligible entries joined this time.")
@@ -198,9 +243,9 @@ export async function buildGiveawayPayload(giveaway: Giveaway, forceOpen = false
   const mentions = winnerIds.length ? { parse: [] as const, users: winnerIds } : { parse: [] as const };
   if (!isOpen) {
     return {
-      content: winnerMentions.length ? `🎊 Congratulations ${winnerMentions.join(", ")}!` : "🎊 Giveaway ended.",
+      content: giveaway.status === "cancelled" ? "🎊 Giveaway cancelled." : winnerMentions.length ? `🎊 Congratulations ${winnerMentions.join(", ")}!` : "🎊 Giveaway ended.",
       embeds: [embed],
-      components: [],
+      components: giveaway.status === "ended" ? [new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`giveaway:control:reroll:${giveaway.id}`).setLabel("Reroll").setStyle(ButtonStyle.Secondary))] : [],
       allowedMentions: mentions,
     };
   }
@@ -209,5 +254,9 @@ export async function buildGiveawayPayload(giveaway: Giveaway, forceOpen = false
     new ButtonBuilder().setCustomId(`giveaway:join:${giveaway.id}`).setLabel("Join Giveaway").setEmoji("🎉").setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`giveaway:leave:${giveaway.id}`).setLabel("Leave").setEmoji("↩️").setStyle(ButtonStyle.Secondary),
   );
-  return { embeds: [embed], components: [row], allowedMentions: { parse: [] as const } };
+  const controls = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`giveaway:control:end:${giveaway.id}`).setLabel("End now").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`giveaway:control:cancel:${giveaway.id}`).setLabel("Cancel").setStyle(ButtonStyle.Danger),
+  );
+  return { embeds: [embed], components: [row, controls], allowedMentions: { parse: [] as const } };
 }

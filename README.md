@@ -6,11 +6,12 @@ An AI-only Discord bot with prefix, slash-command, mention, and reply prompts. I
 
 1. Copy `.env.example` to `.env` and fill in the values.
 2. Add `GEMINI_API_KEY`. `OPENROUTER_API_KEY` enables OpenRouter in `/settings` and as a fallback. `XKIRO_API_KEY` enables Xkiro in `/settings` and as a fallback. Optional `APINEX_API_KEY` and `VYCEAI_API_KEY` enable automatic fallbacks; they are not selectable in `/settings`.
+   Set `VIP_ADMIN_ID` to the Discord user ID allowed to run `c.givevip` and `c.remove-vip`.
 3. Install dependencies with `npm install`.
 4. Register commands with `npm run register`.
 5. Start the bot with `npm run dev`.
 
-Enable the **Message Content Intent** in the Discord Developer Portal. Give the bot permissions to View Channels, Send Messages, Embed Links, Read Message History, and Use Application Commands.
+Enable the **Message Content Intent** and **Server Members Intent** in the Discord Developer Portal. Give the bot permissions to View Channels, Send Messages, Embed Links, Read Message History, Use Application Commands, and Manage Roles if you enable verification or role menus.
 
 ## Global AI instructions
 
@@ -31,6 +32,14 @@ Edit [`system-instructions.txt`](system-instructions.txt) to control how the AI 
 - `c.listen [channel]` / `/listen` (server administrators)
 - `c.ignore [channel]` / `/ignore` (server administrators)
 - `c.admin <request>` / `c.adminchat <request>` (server administrators; creates and manages text channels and categories)
+- `c.chats` (show, switch, create, rename, or delete separate conversation histories; 3 free or 10 VIP per channel)
+- `c.newchat [name]`, `c.summarise`, `c.compact`, `c.regenerate`, and `c.export` (VIP export/regenerate)
+- `c.remember <fact>`, `c.memories`, and `c.forget <id>` (VIP cross-server personal memory)
+- `c.reminders`, `c.timers`, `c.scheduled`, and `c.cancel reminder|timer|scheduled|poll <id>`
+- `c.gw add @role` / `c.gw remove` (configure the specific giveaway-manager role), plus `c.gw end <id>`, `c.gw cancel <id>`, `c.gw reroll <id>`, and `c.gw edit (id) (duration) (winners) (prize)`
+- `c.serverconfig` / `c.privacy` (server configuration panel for welcome/goodbye messages, verification, selectable role menus, giveaway access, and history retention)
+
+VIP users receive 10 chat slots, up to 50 recent conversation messages, cross-server personal memory, selectable response styles, chat export and regeneration, plus 20 attachment uploads per hour with 25 MB per file and 50 MB total per message. Free users receive 3 chat slots, 5 history messages, and 3 attachment uploads per hour with the standard attachment limits.
 
 In admin chat, ask Chromix to build several categories and channels in one prompt. It creates categories first and assigns channels during creation, uses colorful Unicode emoji names such as `💬┃general` by default, and tracks channel-creation calls in SQLite to stay within the configured limit of 10 creations per rolling 10 minutes. If that limit is full, it shows a status and waits for the next slot.
 

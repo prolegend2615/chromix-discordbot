@@ -15,10 +15,14 @@ export type AttachmentDescriptor = DiscordAttachmentInput & {
   mimeType: string;
 };
 
-const MAX_FILE_BYTES = 8 * 1024 * 1024;
-const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
-const MAX_TEXT_PER_FILE = 40_000;
-const MAX_TEXT_TOTAL = 80_000;
+const FREE_MAX_FILE_BYTES = 8 * 1024 * 1024;
+const VIP_MAX_FILE_BYTES = 25 * 1024 * 1024;
+const FREE_MAX_TOTAL_BYTES = 16 * 1024 * 1024;
+const VIP_MAX_TOTAL_BYTES = 50 * 1024 * 1024;
+const FREE_MAX_TEXT_PER_FILE = 40_000;
+const VIP_MAX_TEXT_PER_FILE = 100_000;
+const FREE_MAX_TEXT_TOTAL = 80_000;
+const VIP_MAX_TEXT_TOTAL = 250_000;
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const TEXT_EXTENSIONS: Record<string, string> = {
   txt: "text/plain", md: "text/markdown", markdown: "text/markdown", csv: "text/csv",
@@ -34,7 +38,8 @@ function cleanName(value: string) {
   return basename.replace(/[\r\n\u0000-\u001f<>]/gu, "_").slice(0, 120) || "attachment";
 }
 
-function classify(input: DiscordAttachmentInput): AttachmentDescriptor {
+function classify(input: DiscordAttachmentInput, vip: boolean): AttachmentDescriptor {
+  const maxFileBytes = vip ? VIP_MAX_FILE_BYTES : FREE_MAX_FILE_BYTES;
   const name = cleanName(input.name);
   const extension = /\.([^.]+)$/u.exec(name)?.[1]?.toLowerCase() ?? "";
   const declaredType = input.contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -48,8 +53,8 @@ function classify(input: DiscordAttachmentInput): AttachmentDescriptor {
   if (!kind) {
     throw new Error(`I can read PNG, JPEG, WebP, and GIF images, PDFs, and common text/code files. “${name}” isn’t a supported file type.`);
   }
-  if (!Number.isFinite(input.size) || input.size < 0 || input.size > MAX_FILE_BYTES) {
-    throw new Error(`“${name}” is too large for analysis. Each attachment must be 8 MB or smaller.`);
+  if (!Number.isFinite(input.size) || input.size < 0 || input.size > maxFileBytes) {
+    throw new Error(`“${name}” is too large for analysis. Each attachment must be ${vip ? 25 : 8} MB or smaller.`);
   }
   return {
     ...input,
@@ -61,19 +66,19 @@ function classify(input: DiscordAttachmentInput): AttachmentDescriptor {
   };
 }
 
-export function validateAttachmentInputs(inputs: DiscordAttachmentInput[]): AttachmentDescriptor[] {
+export function validateAttachmentInputs(inputs: DiscordAttachmentInput[], vip = false): AttachmentDescriptor[] {
   if (!inputs.length) return [];
   let totalBytes = 0;
   const descriptors = inputs.map(input => {
-    const descriptor = classify(input);
+    const descriptor = classify(input, vip);
     totalBytes += descriptor.size;
     return descriptor;
   });
-  if (totalBytes > MAX_TOTAL_BYTES) throw new Error("Attachments in one message must total 16 MB or less.");
+  if (totalBytes > (vip ? VIP_MAX_TOTAL_BYTES : FREE_MAX_TOTAL_BYTES)) throw new Error(`Attachments in one message must total ${vip ? 50 : 16} MB or less.`);
   return descriptors;
 }
 
-async function download(descriptor: AttachmentDescriptor): Promise<Buffer> {
+async function download(descriptor: AttachmentDescriptor, maxFileBytes: number): Promise<Buffer> {
   let url: URL;
   try { url = new URL(descriptor.url); }
   catch { throw new Error(`I couldn't read “${descriptor.name}”: its Discord attachment URL is invalid.`); }
@@ -84,7 +89,7 @@ async function download(descriptor: AttachmentDescriptor): Promise<Buffer> {
   const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
   if (!response.ok || !response.body) throw new Error(`I couldn't download “${descriptor.name}” from Discord (HTTP ${response.status}).`);
   const contentLength = Number(response.headers.get("content-length") ?? 0);
-  if (contentLength > MAX_FILE_BYTES) throw new Error(`“${descriptor.name}” is too large for analysis. Each attachment must be 8 MB or smaller.`);
+  if (contentLength > maxFileBytes) throw new Error(`“${descriptor.name}” is too large for analysis. Each attachment must be ${Math.round(maxFileBytes / 1024 / 1024)} MB or smaller.`);
 
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -93,9 +98,9 @@ async function download(descriptor: AttachmentDescriptor): Promise<Buffer> {
     const { done, value } = await reader.read();
     if (done) break;
     total += value.byteLength;
-    if (total > MAX_FILE_BYTES) {
+    if (total > maxFileBytes) {
       await reader.cancel();
-      throw new Error(`“${descriptor.name}” is too large for analysis. Each attachment must be 8 MB or smaller.`);
+      throw new Error(`“${descriptor.name}” is too large for analysis. Each attachment must be ${Math.round(maxFileBytes / 1024 / 1024)} MB or smaller.`);
     }
     chunks.push(value);
   }
@@ -110,14 +115,18 @@ function sniffImage(data: Buffer): string | null {
   return null;
 }
 
-export async function prepareAttachments(descriptors: AttachmentDescriptor[]): Promise<PreparedAttachment[]> {
+export async function prepareAttachments(descriptors: AttachmentDescriptor[], vip = false): Promise<PreparedAttachment[]> {
   const prepared: PreparedAttachment[] = [];
   let totalDownloadedBytes = 0;
   let totalTextCharacters = 0;
   for (const descriptor of descriptors) {
-    const data = await download(descriptor);
+    const maxFileBytes = vip ? VIP_MAX_FILE_BYTES : FREE_MAX_FILE_BYTES;
+    const maxTotalBytes = vip ? VIP_MAX_TOTAL_BYTES : FREE_MAX_TOTAL_BYTES;
+    const maxTextTotal = vip ? VIP_MAX_TEXT_TOTAL : FREE_MAX_TEXT_TOTAL;
+    const maxTextPerFile = vip ? VIP_MAX_TEXT_PER_FILE : FREE_MAX_TEXT_PER_FILE;
+    const data = await download(descriptor, maxFileBytes);
     totalDownloadedBytes += data.length;
-    if (totalDownloadedBytes > MAX_TOTAL_BYTES) throw new Error("Attachments in one message must total 16 MB or less.");
+    if (totalDownloadedBytes > maxTotalBytes) throw new Error(`Attachments in one message must total ${vip ? 50 : 16} MB or less.`);
     if (descriptor.kind === "image") {
       const mimeType = sniffImage(data);
       if (!mimeType) throw new Error(`“${descriptor.name}” doesn’t contain a supported PNG, JPEG, WebP, or GIF image.`);
@@ -130,8 +139,8 @@ export async function prepareAttachments(descriptors: AttachmentDescriptor[]): P
       let text: string;
       try { text = new TextDecoder("utf-8", { fatal: true }).decode(data); }
       catch { throw new Error(`“${descriptor.name}” isn’t valid UTF-8 text. Please upload a plain-text or code file.`); }
-      const available = Math.max(0, MAX_TEXT_TOTAL - totalTextCharacters);
-      const allowance = Math.min(MAX_TEXT_PER_FILE, available);
+      const available = Math.max(0, maxTextTotal - totalTextCharacters);
+      const allowance = Math.min(maxTextPerFile, available);
       const clipped = text.slice(0, allowance);
       totalTextCharacters += clipped.length;
       prepared.push({

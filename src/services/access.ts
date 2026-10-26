@@ -44,7 +44,7 @@ export async function reserveAttachmentUploads(userId: string, vip: boolean, upl
   const current = previous.catch(() => undefined).then(async () => {
     const db = await dbPromise;
     const now = Date.now();
-    const limit = vip ? 10 : 3;
+    const limit = vip ? 20 : 3;
     await db.run("DELETE FROM attachment_upload_events WHERE user_id=? AND created_at<=?", userId, now - ATTACHMENT_WINDOW_MS);
     const row = await db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM attachment_upload_events WHERE user_id=? AND created_at>?",
@@ -84,7 +84,7 @@ export async function releaseAttachmentUploadReservations(eventIds: number[]) {
 export async function getAttachmentUploadStatus(userId: string, vip: boolean) {
   const db = await dbPromise;
   const now = Date.now();
-  const limit = vip ? 10 : 3;
+   const limit = vip ? 20 : 3;
   await db.run("DELETE FROM attachment_upload_events WHERE user_id=? AND created_at<=?", userId, now - ATTACHMENT_WINDOW_MS);
   const row = await db.get<{ count: number }>(
     "SELECT COUNT(*) AS count FROM attachment_upload_events WHERE user_id=? AND created_at>?",

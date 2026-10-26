@@ -11,6 +11,9 @@ export type Poll = {
   scheduled_at: number;
   status: string;
   message_id: string | null;
+  delivery_attempts: number;
+  retry_at: number | null;
+  last_error: string | null;
 };
 
 export async function createPoll(input: { guildId: string; channelId: string; creatorId: string; question: string; options: string[]; scheduledAt: number }) {
@@ -31,7 +34,7 @@ export async function createPoll(input: { guildId: string; channelId: string; cr
 }
 
 export async function getDuePolls(now = Date.now()): Promise<Poll[]> {
-  return (await dbPromise).all<Poll[]>("SELECT * FROM polls WHERE status='scheduled' AND scheduled_at<=? ORDER BY scheduled_at,id", now);
+  return (await dbPromise).all<Poll[]>("SELECT * FROM polls WHERE status='scheduled' AND scheduled_at<=? AND (retry_at IS NULL OR retry_at<=?) ORDER BY scheduled_at,id", now, now);
 }
 
 export async function publishPoll(id: number, messageId: string) {
@@ -40,6 +43,15 @@ export async function publishPoll(id: number, messageId: string) {
 
 export async function getPoll(id: number): Promise<Poll | undefined> {
   return (await dbPromise).get<Poll>("SELECT * FROM polls WHERE id=?", id);
+}
+
+export async function getUserPolls(userId: string) {
+  return (await dbPromise).all<Poll[]>("SELECT * FROM polls WHERE creator_id=? AND status IN ('scheduled','open') ORDER BY scheduled_at", userId);
+}
+
+export async function cancelPoll(id: number, userId: string) {
+  const result = await (await dbPromise).run("UPDATE polls SET status='cancelled' WHERE id=? AND creator_id=? AND status IN ('scheduled','open')", id, userId);
+  return result.changes === 1;
 }
 
 export async function votePoll(id: number, userId: string, optionIndex: number) {
@@ -67,4 +79,17 @@ export async function buildPollPayload(poll: Poll) {
   const menu = new StringSelectMenuBuilder().setCustomId(`poll:vote:${poll.id}`).setPlaceholder("Cast or change your vote")
     .addOptions(options.map((label, value) => ({ label, value: String(value) })));
   return { embeds: [embed], components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)] };
+}
+
+export async function markPollDeliveryFailure(poll: Poll, error: unknown) {
+  const db = await dbPromise;
+  const attempts = Number(poll.delivery_attempts ?? 0) + 1;
+  const message = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+  if (attempts >= 3) {
+    await db.run("INSERT INTO scheduled_delivery_failures(kind,action_id,guild_id,creator_id,error,created_at) VALUES(?,?,?,?,?,?)", "poll", poll.id, poll.guild_id, poll.creator_id, message, Date.now());
+    await db.run("UPDATE polls SET status='failed',last_error=? WHERE id=?", message, poll.id);
+    return { failed: true, attempts };
+  }
+  await db.run("UPDATE polls SET delivery_attempts=?,retry_at=?,last_error=? WHERE id=?", attempts, Date.now() + 60_000, message, poll.id);
+  return { failed: false, attempts };
 }
