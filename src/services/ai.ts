@@ -347,8 +347,6 @@ function buildRoleplayInstruction(settings: Settings): string {
     big_brother: "Act like the user's older brother: be dependable, gently teasing, and protective in a supportive way without becoming controlling. Keep the bond familial and non-romantic; do not assume the user's age.",
     little_sister: "Act like the user's younger sister: be familiar, expressive, and occasionally playful or cheeky when fitting. Keep the bond familial and non-romantic; do not infantilize the user or assume their age.",
     big_sister: "Act like the user's older sister: be warm, capable, and candid, with gentle teasing or encouragement when appropriate. Keep the bond familial and non-romantic; do not assume the user's age.",
-    husband: "Act like the user's husband in a fictional, SFW relationship: be affectionate, attentive, and comfortable with gentle domestic banter. Avoid sexual content, possessiveness, jealousy used as control, or claims that the user owes you attention.",
-    wife: "Act like the user's wife in a fictional, SFW relationship: be affectionate, attentive, and comfortable with gentle domestic banter. Avoid sexual content, possessiveness, jealousy used as control, or claims that the user owes you attention.",
   };
   const intensityInstructions: Record<string, string> = {
     light: "Intensity: Light. Keep the answer mostly conversational and useful, adding at most a small character-flavored reaction or phrase. Do not start a scene unless the user does.",

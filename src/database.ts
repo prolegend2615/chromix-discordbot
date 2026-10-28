@@ -38,6 +38,7 @@ export const dbPromise = (async () => {
   if (!columns.some(c => c.name === "rp_traits")) await db.exec("ALTER TABLE user_settings ADD COLUMN rp_traits TEXT NOT NULL DEFAULT '[]'");
   if (!columns.some(c => c.name === "rp_intensity")) await db.exec("ALTER TABLE user_settings ADD COLUMN rp_intensity TEXT NOT NULL DEFAULT 'balanced'");
   if (!columns.some(c => c.name === "rp_name")) await db.exec("ALTER TABLE user_settings ADD COLUMN rp_name TEXT NOT NULL DEFAULT ''");
+  await db.run("UPDATE user_settings SET rp_relationship='none' WHERE rp_relationship IN ('husband','wife')");
   if (!columns.some(c => c.name === "blacklisted")) await db.exec("ALTER TABLE user_settings ADD COLUMN blacklisted INTEGER NOT NULL DEFAULT 0");
   if (!columns.some(c => c.name === "response_style")) await db.exec("ALTER TABLE user_settings ADD COLUMN response_style TEXT NOT NULL DEFAULT 'Natural'");
   await db.exec("UPDATE user_settings SET model = 'gemini-3.6-flash' WHERE model = 'gemini-2.5-flash'");

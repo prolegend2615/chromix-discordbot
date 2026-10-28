@@ -436,8 +436,6 @@ const ROLEPLAY_RELATIONSHIPS: Array<{ label: string; value: RoleplayRelationship
   { label: "Big brother", value: "big_brother" },
   { label: "Little sister", value: "little_sister" },
   { label: "Big sister", value: "big_sister" },
-  { label: "Husband", value: "husband" },
-  { label: "Wife", value: "wife" },
 ];
 const ROLEPLAY_INTENSITIES: Array<{ label: string; value: RoleplayIntensity; description: string }> = [
   { label: "Light", value: "light", description: "A little character flavor, mostly normal chat." },
