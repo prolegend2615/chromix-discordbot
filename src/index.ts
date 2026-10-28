@@ -5,7 +5,7 @@ import {
 } from "discord.js";
 import { config } from "./config.js";
 import { runChat } from "./services/chat.js";
-import { clearHistory, getHistory } from "./services/history.js";
+import { clearAllUserHistory, clearHistory, getHistory } from "./services/history.js";
 import { deleteUserDataExceptVip, getSettings, isUserBlacklisted, PERSONAS, resetSettings, setUserBlacklist, setVip, updateRoleplaySettings, updateSettings, ROLEPLAY_TRAITS, RESPONSE_STYLES, type Persona, type Provider, type ResponseLength, type ResponseStyle, type RoleplayIntensity, type RoleplayRelationship, type RoleplayTrait, type SafetyLevel } from "./services/settings.js";
 import { getAttachmentUploadStatus, getPromptStatus, setChannelRule } from "./services/access.js";
 import { getAverageResponseTime } from "./services/metrics.js";
@@ -402,6 +402,17 @@ async function handleVipCommand(context: CommandContext, grant: boolean, duratio
   });
 }
 
+async function handleAdminClearCommand(message: Message) {
+  if (message.author.id !== VIP_ADMIN_ID) throw new Error("You are not allowed to use this command.");
+  const recipient = message.mentions.users.first();
+  if (!recipient) throw new Error("Usage: `c.adminclear @user` — mention the user whose saved conversation history should be cleared.");
+  await clearAllUserHistory(recipient.id);
+  await message.reply({
+    content: `Cleared ${recipient.username}'s saved conversation history across all channels and servers. Their named chat lists were kept.`,
+    allowedMentions: { parse: [], repliedUser: false },
+  });
+}
+
 async function handleBlacklistCommand(context: CommandContext, blacklist: boolean) {
   if (context.userId !== VIP_ADMIN_ID) throw new Error("You are not allowed to use this command.");
   if (!context.recipient) throw new Error("Mention a user to blacklist or unblacklist.");
@@ -648,6 +659,7 @@ function helpEmbed() {
   return new EmbedBuilder().setTitle("AI Bot Help").setColor(0x5865F2).setDescription("Chat using `/chat`, `c.chat <message>`, mentioning me, or replying to one of my messages.")
     .addFields(
       { name: "Settings", value: "`/settings` or `c.settings` — configure provider, model, response length, safety, instructions, and persona. `c.rpsettings` opens private SFW roleplay controls, including a custom character name.\n`/persona` — quickly choose or write a custom persona." },
+      { name: "Owner command", value: "`c.adminclear @user` clears that user's saved conversation history across all channels and servers." },
       { name: "History", value: "`/clear` removes history in this channel. When you refer to recent channel context, Chromix can look up up to 20 earlier messages. Thread chats get their own persistent conversation history. `/reset` also resets your settings. `/delete-my-data` removes stored data but keeps VIP." },
       { name: "Limits", value: "8 prompts per minute, with a 5-second cooldown. Attachment analysis allows 3 uploads per rolling hour for free users and 20 for VIP; VIP files can be 25 MB each and 50 MB per message. VIP users receive 50 history messages; others receive 5." },
       { name: "Image generation", value: "Ask me to create an image in a server chat. Each server can generate 3 images every 15 minutes and 50 per UTC day. Image generation is unavailable in DMs." },
@@ -1169,6 +1181,10 @@ client.on(Events.MessageCreate, async message => {
       const durationText = content.slice(firstCommand.length).replace(/<@!?\d+>/gu, " ").trim();
       const durationSeconds = parseVipDuration(durationText);
       await handleVipCommand(messageCommandContext(message, { recipient: message.mentions.users.first() ?? undefined }), true, durationSeconds ?? undefined);
+      return;
+    }
+    if (isPrefixCommand(content, "adminclear")) {
+      await handleAdminClearCommand(message);
       return;
     }
     if (isPrefixCommand(content, "remove-vip")) {

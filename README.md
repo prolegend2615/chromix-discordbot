@@ -28,6 +28,7 @@ Edit [`system-instructions.txt`](system-instructions.txt) to control how the AI 
 - `c.reset` / `/reset`
 - `/delete-my-data` (keeps VIP access)
 - `c.givevip @user 7d` (restricted to the configured owner ID; grants temporary VIP for 1 minute to 365 days)
+- `c.adminclear @user` (restricted to the same configured owner ID; clears that user's saved conversation history across channels and servers)
 - `c.remove-vip @user` / `/remove-vip` (restricted to the configured owner ID)
 - `c.listen [channel]` / `/listen` (server administrators)
 - `c.ignore [channel]` / `/ignore` (server administrators)
