@@ -7,6 +7,7 @@ const MAX_TTS_CHARS = 200;
 const OPENROUTER_TTS_URL = "https://openrouter.ai/api/v1/audio/speech";
 const OPENROUTER_TTS_MODEL = "deepgram/flux-tts:free";
 const OPENROUTER_TTS_TIMEOUT_MS = 30_000;
+const VOICE_RESERVATION_TIMEOUT_MS = 120_000;
 
 export function normalizeTtsText(text: string): string {
   return text
@@ -143,6 +144,7 @@ export function reserveVoiceMessage(args: { channel: TextBasedChannel; channelId
   let resolveResult!: (sent: boolean) => void;
   let resolveReady!: () => void;
   let decisionMade = false;
+  let reservationTimeout: ReturnType<typeof setTimeout>;
   const result = new Promise<boolean>(resolve => { resolveResult = resolve; });
   const ready = new Promise<void>(resolve => { resolveReady = resolve; });
   const queue = voiceQueues.get(args.channelId) ?? [];
@@ -157,12 +159,19 @@ export function reserveVoiceMessage(args: { channel: TextBasedChannel; channelId
   };
   queue.push(entry);
   voiceQueues.set(args.channelId, queue);
+  reservationTimeout = setTimeout(() => {
+    if (decisionMade) return;
+    decisionMade = true;
+    entry.cancelled = true;
+    entry.resolveReady();
+  }, VOICE_RESERVATION_TIMEOUT_MS);
   void drainVoiceQueue(args.channelId);
   return {
     position,
     complete(text: string) {
       if (!decisionMade) {
         decisionMade = true;
+        clearTimeout(reservationTimeout);
         entry.text = text;
         entry.resolveReady();
       }
@@ -171,6 +180,7 @@ export function reserveVoiceMessage(args: { channel: TextBasedChannel; channelId
     cancel() {
       if (decisionMade) return;
       decisionMade = true;
+      clearTimeout(reservationTimeout);
       entry.cancelled = true;
       entry.resolveReady();
     },

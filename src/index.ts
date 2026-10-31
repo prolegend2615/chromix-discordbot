@@ -16,7 +16,7 @@ import { handleRockPaperScissorsButton, startRockPaperScissorsGame } from "./ser
 import { handleTicTacToeButton, startTicTacToeGame } from "./services/tic-tac-toe.js";
 import { buildPollPayload, cancelPoll, getDuePolls, getPoll, getUserPolls, publishPoll, votePoll, markPollDeliveryFailure } from "./services/polls.js";
 import { deleteTimer, deleteScheduledPost, deleteUserTimer, getDueScheduledPosts, getDueTimers, getUserScheduledPosts, getUserTimers, markScheduledPostSent, markScheduledPostDeliveryFailure, markTimerDeliveryFailure, parseScheduleDuration } from "./services/scheduled-actions.js";
-import { buildGiveawayPayload, drawGiveaway, getDueGiveaways, getGiveaway, joinGiveaway, leaveGiveaway, markGiveawayEnded } from "./services/giveaways.js";
+import { buildGiveawayPayload, drawGiveaway, getDueGiveaways, getGiveaway, joinGiveaway, leaveGiveaway, markGiveawayEnded, markGiveawayDeliveryFailure } from "./services/giveaways.js";
 import { cancelGiveaway, canManageGiveaways, editGiveaway, rerollGiveaway, setGiveawayManagerRole } from "./services/giveaways.js";
 import { getGuildConfig, renderCommunityMessage, updateGuildConfig } from "./services/guild-config.js";
 import { conversationChannelId, createChat, deleteChat, getCurrentChat, listChats, renameChat, selectChat } from "./services/chats.js";
@@ -32,6 +32,24 @@ const VIP_MAX_DURATION_SECONDS = 365 * 24 * 60 * 60;
 let reminderSweepInProgress = false;
 let scheduledActionSweepInProgress = false;
 const pendingAdminActions = new Map<string, { guildId: string; userId: string; command: ChannelManagementCommand; expiresAt: number }>();
+const ADMIN_ACTION_TTL_MS = 60_000;
+const ADMIN_ACTION_MAX_PENDING = 500;
+
+function prunePendingAdminActions(now = Date.now()) {
+  for (const [messageId, action] of pendingAdminActions) {
+    if (action.expiresAt <= now) pendingAdminActions.delete(messageId);
+  }
+  while (pendingAdminActions.size >= ADMIN_ACTION_MAX_PENDING) {
+    const oldest = pendingAdminActions.keys().next().value as string | undefined;
+    if (!oldest) break;
+    pendingAdminActions.delete(oldest);
+  }
+}
+
+function truncateDiscordText(value: string, maxLength = 1900) {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 24).trimEnd()}\n… (list truncated)`;
+}
 
 function isPrefixCommand(content: string, name: string): boolean {
   return new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${name}(?:\\s|$)`, "i").test(content.trim());
@@ -116,7 +134,8 @@ async function deliverDueScheduledActions() {
         if (!updated) await sendChannelMessage(giveaway.channel_id, resultPayload);
         await markGiveawayEnded(giveaway.id);
       } catch (error) {
-        console.error(`Giveaway ${dueGiveaway.id} could not be finalized; it will be retried.`, error);
+        const failure = await markGiveawayDeliveryFailure(dueGiveaway, error).catch(() => null);
+        console.error(`Giveaway ${dueGiveaway.id} finalization failed${failure?.failed ? " permanently after three attempts" : "; it will be retried"}.`, error);
       }
     }
   } catch (error) {
@@ -942,7 +961,7 @@ async function handleScheduledManagementCommand(message: Message, command: "remi
     lines.push(...posts.map(item => `🗓️ Message #${item.id} — <t:${Math.floor(item.scheduled_at / 1000)}:R> — ${item.content}`));
     lines.push(...polls.filter(item => item.status === "scheduled").map(item => `📊 Poll #${item.id} — <t:${Math.floor(item.scheduled_at / 1000)}:R> — ${item.question}`));
   }
-  await message.reply({ content: lines.length ? `${command === "reminders" ? "Your reminders" : command === "timers" ? "Your timers" : "Your scheduled actions"}:\n${lines.join("\n")}` : "You have no pending scheduled actions.", allowedMentions: { parse: [] } });
+  await message.reply({ content: truncateDiscordText(lines.length ? `${command === "reminders" ? "Your reminders" : command === "timers" ? "Your timers" : "Your scheduled actions"}:\n${lines.join("\n")}` : "You have no pending scheduled actions."), allowedMentions: { parse: [] } });
 }
 
 async function handlePersonalMemoryCommand(message: Message, command: "remember" | "memories" | "forget", value: string) {
@@ -1009,7 +1028,8 @@ async function sendChatFromMessage(message: Message, prompt: string, referenceId
     onTicTacToe: placeholder => startTicTacToeGame(placeholder, message.author.id),
     onAdminConfirmation: async (command, placeholder) => {
       if (!message.guildId) return;
-      pendingAdminActions.set(placeholder.id, { guildId: message.guildId, userId: message.author.id, command, expiresAt: Date.now() + 60_000 });
+      prunePendingAdminActions();
+      pendingAdminActions.set(placeholder.id, { guildId: message.guildId, userId: message.author.id, command, expiresAt: Date.now() + ADMIN_ACTION_TTL_MS });
       await placeholder.edit({
         content: "⚠️ This will permanently delete a Discord channel or category. Confirm the exact action below.",
         components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -1060,13 +1080,10 @@ client.on(Events.GuildMemberRemove, async member => {
 
 client.on(Events.MessageCreate, async message => {
   if (message.author.bot) return;
-  if (await isUserBlacklisted(message.author.id)) {
-    await message.reply({ content: "You are blacklisted and cannot use bot commands.", allowedMentions: { repliedUser: false } }).catch(() => undefined);
-    return;
-  }
   const content = message.content.trim();
   const command = content.toLowerCase();
   try {
+    if (await isUserBlacklisted(message.author.id)) return;
     const previousAfk = await getAfkStatus(message.author.id, message.guildId ?? undefined);
     if (previousAfk) {
       await clearAfkStatus(message.author.id, message.guildId ?? undefined);
@@ -1241,7 +1258,7 @@ client.on(Events.MessageCreate, async message => {
       }
     }
     const mentioned = message.mentions.users.has(client.user!.id);
-    const replyToBot = message.reference?.messageId
+    const replyToBot = !mentioned && message.reference?.messageId
       ? (await message.channel.messages.fetch(message.reference.messageId).catch(() => null))?.author.id === client.user!.id
       : false;
     if (mentioned || replyToBot) {
@@ -1249,9 +1266,12 @@ client.on(Events.MessageCreate, async message => {
       await sendChatFromMessage(message, prompt, message.reference?.messageId);
     }
   } catch (error) {
+    console.error("Message handler failed.", error);
     const text = error instanceof Error && /AI provider|rate.?limit|timeout|unavailable|api key|request failed/i.test(error.message)
       ? userFacingProviderError(error)
-      : error instanceof Error ? error.message : "Something went wrong while handling that request.";
+      : error instanceof Error && /^(Please |You need |I am |Only |Usage:|That |This |Personal |Custom |Regenerate |Image generation|Admin chat)/i.test(error.message)
+        ? error.message
+        : "Something went wrong while handling that request.";
     await message.reply({ content: text, allowedMentions: { repliedUser: false } }).catch(() => undefined);
   }
 });
@@ -1358,8 +1378,8 @@ client.on(Events.InteractionCreate, async interaction => {
         const menu = await getRoleMenu(Number(interaction.customId.split(":")[2]));
         if (!menu || menu.guild_id !== interaction.guildId || !interaction.guild) throw new Error("That role menu is no longer available.");
         const member = await interaction.guild.members.fetch(interaction.user.id);
-        await applyRoleMenuSelection(member, menu.options, interaction.values);
-        await interaction.reply({ content: "Your community roles were updated.", flags: MessageFlags.Ephemeral });
+        const result = await applyRoleMenuSelection(member, menu.options, interaction.values);
+        await interaction.reply({ content: result.failed ? `Your role selection was applied with ${result.failed} role update(s) that Discord rejected.` : "Your community roles were updated.", flags: MessageFlags.Ephemeral });
       } else if (interaction.customId.startsWith("poll:vote:")) await handlePollVote(interaction);
       else if (interaction.customId.startsWith("rp:")) await handleRoleplaySettingsSelect(interaction);
       else await handleSettingSelect(interaction);
@@ -1418,6 +1438,8 @@ client.on(Events.InteractionCreate, async interaction => {
       await handleSettingsContinue(interaction);
     }
     if (interaction.isModalSubmit() && interaction.customId.startsWith("chats:new-modal:")) {
+      const [, , ownerId] = interaction.customId.split(":");
+      if (ownerId !== interaction.user.id) throw new Error("Only the person who opened this chat panel can create a chat.");
       const settings = await getSettings(interaction.user.id, interaction.guildId ?? undefined);
       await createChat(interaction.user.id, interaction.guildId ?? undefined, interaction.channelId ?? "", Boolean(settings.vip), interaction.fields.getTextInputValue("chat-name"));
       const menu = await chatMenuComponents(interaction.user.id, interaction.guildId ?? undefined, interaction.channelId ?? "");
@@ -1463,7 +1485,7 @@ client.on(Events.InteractionCreate, async interaction => {
       await interaction.reply({ content: "Role menu posted.", flags: MessageFlags.Ephemeral });
     }
     if (interaction.isModalSubmit() && interaction.customId === "settings:prompt-modal") {
-      updateSettings(interaction.user.id, interaction.guildId ?? undefined, { custom_system_prompt: interaction.fields.getTextInputValue("custom-prompt").trim() });
+      await updateSettings(interaction.user.id, interaction.guildId ?? undefined, { custom_system_prompt: interaction.fields.getTextInputValue("custom-prompt").trim() });
       await interaction.reply({ content: "Custom instructions saved.", flags: MessageFlags.Ephemeral });
     }
     if (interaction.isModalSubmit() && interaction.customId === "settings:persona-modal") {
@@ -1489,10 +1511,11 @@ client.on(Events.InteractionCreate, async interaction => {
       await interaction.reply({ content: name ? `Your roleplay character name is now ${name}.` : "Your roleplay character name was reset to Chromix.", flags: MessageFlags.Ephemeral });
     }
   } catch (error) {
-    const text = error instanceof Error ? error.message : "Something went wrong.";
+    console.error("Interaction handler failed.", error);
+    const text = "Something went wrong while handling that interaction. Please try again.";
     if (interaction.isRepliable()) {
-      if (interaction.replied || interaction.deferred) await interaction.followUp({ content: text, flags: MessageFlags.Ephemeral });
-      else await interaction.reply({ content: text, flags: MessageFlags.Ephemeral });
+      if (interaction.replied || interaction.deferred) await interaction.followUp({ content: text, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+      else await interaction.reply({ content: text, flags: MessageFlags.Ephemeral }).catch(() => undefined);
     }
   }
 });

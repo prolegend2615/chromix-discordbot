@@ -177,11 +177,13 @@ export async function searchWeb(
   }
 
   const results = mapResults(provider, payload);
-  searchCache.set(cacheKey, { expiresAt: Date.now() + CACHE_TTL_MS, results });
-  while (searchCache.size > 100) {
-    const oldestKey = searchCache.keys().next().value;
-    if (oldestKey === undefined) break;
-    searchCache.delete(oldestKey);
+  if (results.length) {
+    searchCache.set(cacheKey, { expiresAt: Date.now() + CACHE_TTL_MS, results });
+    while (searchCache.size > 100) {
+      const oldestKey = searchCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      searchCache.delete(oldestKey);
+    }
   }
   return results;
 }

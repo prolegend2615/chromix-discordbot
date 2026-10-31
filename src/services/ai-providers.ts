@@ -24,6 +24,8 @@ type OpenAICompatibleRequest = {
   fetchImpl?: typeof fetch;
 };
 
+const OPENAI_COMPATIBLE_CONNECT_TIMEOUT_MS = 45_000;
+
 function extractDeltaContent(value: unknown): string {
   return extractMessageContent(value);
 }
@@ -43,6 +45,8 @@ function extractMessageContent(value: unknown): string {
 export async function requestOpenAICompatibleChat(input: OpenAICompatibleRequest, onChunk?: (text: string) => void): Promise<string> {
   const fetchImpl = input.fetchImpl ?? fetch;
   let response: Response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OPENAI_COMPATIBLE_CONNECT_TIMEOUT_MS);
   try {
     response = await fetchImpl(input.endpoint, {
       method: "POST",
@@ -56,10 +60,12 @@ export async function requestOpenAICompatibleChat(input: OpenAICompatibleRequest
         max_tokens: input.maxTokens,
         stream: true,
       }),
-      signal: AbortSignal.timeout(45_000),
+      signal: controller.signal,
     });
   } catch (error) {
     throw new Error(`${input.provider} request failed: ${error instanceof Error ? error.message : "network error"}`);
+  } finally {
+    clearTimeout(timeout);
   }
 
   if (!response.ok) {

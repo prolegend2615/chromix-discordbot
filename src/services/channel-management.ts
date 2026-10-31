@@ -431,12 +431,17 @@ export async function executeChannelManagementCommand(
           return { success: true, message: `✅ History retention is now ${days ? `${days} days` : "unlimited"}.` };
         }
         if (!context?.channelId) return { success: false, message: "Community setup needs the current text channel." };
+        if ((command.feature === "welcome" || command.feature === "goodbye") && command.value.length > 1000) return { success: false, message: "Community welcome and goodbye messages must be 1000 characters or fewer." };
         if (command.feature === "welcome") await updateGuildConfig(guild.id, { welcome_enabled: 1, welcome_channel_id: context.channelId, welcome_message: command.value || config.welcome_message });
         if (command.feature === "goodbye") await updateGuildConfig(guild.id, { goodbye_enabled: 1, goodbye_channel_id: context.channelId, goodbye_message: command.value || config.goodbye_message });
         if (command.feature === "verification") {
           const roleId = /^(?:<@&)?(\d{15,22})>?$/.exec(command.value)?.[1];
           const role = roleId ? await guild.roles.fetch(roleId).catch(() => null) : null;
           if (!role) return { success: false, message: "Verification setup needs a valid role mention or role ID." };
+          const botMember = guild.members.me ?? await guild.members.fetchMe();
+          if (role.managed || role.position >= botMember.roles.highest.position) {
+            return { success: false, message: "The verification role must be unmanaged and below Chromix’s highest role." };
+          }
           await updateGuildConfig(guild.id, { verification_enabled: 1, verification_channel_id: context.channelId, verification_role_id: role.id });
         }
         return { success: true, message: `✅ ${command.feature} community setup was enabled in <#${context.channelId}>.` };

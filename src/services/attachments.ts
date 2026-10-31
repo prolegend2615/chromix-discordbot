@@ -141,6 +141,7 @@ export async function prepareAttachments(descriptors: AttachmentDescriptor[], vi
       catch { throw new Error(`“${descriptor.name}” isn’t valid UTF-8 text. Please upload a plain-text or code file.`); }
       const available = Math.max(0, maxTextTotal - totalTextCharacters);
       const allowance = Math.min(maxTextPerFile, available);
+      if (allowance <= 0) continue;
       const clipped = text.slice(0, allowance);
       totalTextCharacters += clipped.length;
       prepared.push({

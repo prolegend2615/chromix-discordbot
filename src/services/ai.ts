@@ -22,12 +22,15 @@ const RESPONSE_STYLE_INSTRUCTIONS: Record<Settings["response_style"], string> = 
 
 const gemini = new GoogleGenAI({ apiKey: config.geminiApiKey });
 const systemInstructionsPath = resolve("system-instructions.txt");
+let globalInstructionsCache: string | undefined;
 const MAX_OUTPUT_TOKENS: Record<Settings["response_length"], number> = {
   Short: 500,
   Medium: 1000,
   Detailed: 2500,
 };
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
+const OPENROUTER_CONNECT_TIMEOUT_MS = 45_000;
+const OPENROUTER_STREAM_IDLE_TIMEOUT_MS = 45_000;
 const XKIRO_CHAT_URL = "https://api.xkiro.com/v1/chat/completions";
 const APINEX_CHAT_URL = "https://api.apinex.bond/v1/chat/completions";
 const VYCEAI_CHAT_URL = "https://vyceai.com/v1/chat/completions";
@@ -37,12 +40,14 @@ const APINEX_MODELS = ["free/gpt-6-luna", "free/gemini-3.8-flash"] as const;
 const VYCEAI_MODEL = "glm-5.3-flash";
 
 function readGlobalInstructions(): string {
+  if (globalInstructionsCache !== undefined) return globalInstructionsCache;
   try {
-    return readFileSync(systemInstructionsPath, "utf8").trim();
+    globalInstructionsCache = readFileSync(systemInstructionsPath, "utf8").trim();
   } catch (error) {
     console.warn(`Could not read ${systemInstructionsPath}; using built-in defaults.`, error);
-    return "You are a helpful AI assistant in a Discord server.";
+    globalInstructionsCache = "You are a helpful AI assistant in a Discord server.";
   }
+  return globalInstructionsCache;
 }
 
 function getTimeContext(prompt: string, messageTimestamp: number) {
@@ -72,21 +77,29 @@ async function streamOpenRouter(input: {
     throw new Error("OpenRouter is not configured. Add OPENROUTER_API_KEY to the environment and restart the bot.");
   }
 
-  const response = await fetch(OPENROUTER_CHAT_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.openrouterApiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://github.com/prolegend2615/chromix-discordbot",
-      "X-Title": "Chromix Discord Bot",
-    },
-    body: JSON.stringify({
-      model: input.settings.model,
-      stream: true,
-      max_tokens: MAX_OUTPUT_TOKENS[input.settings.response_length],
-      messages: buildChatMessages(input.system, input.history, input.prompt, input.attachments),
-    }),
-  });
+  const controller = new AbortController();
+  const connectTimeout = setTimeout(() => controller.abort(), OPENROUTER_CONNECT_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(OPENROUTER_CHAT_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.openrouterApiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/prolegend2615/chromix-discordbot",
+        "X-Title": "Chromix Discord Bot",
+      },
+      body: JSON.stringify({
+        model: input.settings.model,
+        stream: true,
+        max_tokens: MAX_OUTPUT_TOKENS[input.settings.response_length],
+        messages: buildChatMessages(input.system, input.history, input.prompt, input.attachments),
+      }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(connectTimeout);
+  }
 
   if (!response.ok) {
     throw new Error(`OpenRouter request failed with HTTP ${response.status}.`);
@@ -106,7 +119,9 @@ async function streamOpenRouter(input: {
       if (data === "[DONE]") done = true;
       return;
     }
-    const chunk = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string | null } }> };
+    let chunk: { choices?: Array<{ delta?: { content?: string | null } }> };
+    try { chunk = JSON.parse(data) as typeof chunk; }
+    catch { return; }
     const content = chunk.choices?.[0]?.delta?.content;
     if (content) {
       result += content;
@@ -114,15 +129,26 @@ async function streamOpenRouter(input: {
     }
   };
 
-  while (!done) {
-    const { value, done: readerDone } = await reader.read();
-    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !readerDone });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) processLine(line.trimEnd());
-    if (readerDone) break;
+  try {
+    while (!done) {
+      let idleTimeout: ReturnType<typeof setTimeout> | undefined;
+      const { value, done: readerDone } = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => {
+          idleTimeout = setTimeout(() => reject(new Error("OpenRouter stream timed out while waiting for data.")), OPENROUTER_STREAM_IDLE_TIMEOUT_MS);
+        }),
+      ]).finally(() => { if (idleTimeout) clearTimeout(idleTimeout); });
+      buffer += decoder.decode(value ?? new Uint8Array(), { stream: !readerDone });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) processLine(line.trimEnd());
+      if (readerDone) break;
+    }
+    if (buffer) processLine(buffer.trimEnd());
+  } catch (error) {
+    await reader.cancel(error).catch(() => undefined);
+    throw error;
   }
-  if (buffer) processLine(buffer.trimEnd());
   if (!result.trim()) throw new Error("OpenRouter returned an empty response.");
   return result;
 }

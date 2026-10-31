@@ -34,10 +34,23 @@ export async function applyRoleMenuSelection(member: GuildMember, options: Commu
   const managed = new Set(options.map(option => option.roleId));
   const selectedSet = new Set(selected);
   const botHighestPosition = member.guild.members.me?.roles.highest.position ?? -1;
+  let updated = 0;
+  let failed = 0;
   for (const roleId of managed) {
     const role = member.guild.roles.cache.get(roleId);
     if (!role || role.managed || role.position >= botHighestPosition) continue;
-    if (selectedSet.has(roleId) && !member.roles.cache.has(roleId)) await member.roles.add(role, "Community role menu selection");
-    if (!selectedSet.has(roleId) && member.roles.cache.has(roleId)) await member.roles.remove(role, "Community role menu selection");
+    try {
+      if (selectedSet.has(roleId) && !member.roles.cache.has(roleId)) {
+        await member.roles.add(role, "Community role menu selection");
+        updated += 1;
+      }
+      if (!selectedSet.has(roleId) && member.roles.cache.has(roleId)) {
+        await member.roles.remove(role, "Community role menu selection");
+        updated += 1;
+      }
+    } catch {
+      failed += 1;
+    }
   }
+  return { updated, failed };
 }

@@ -38,9 +38,10 @@ async function reserveImageGeneration(guildId: string, now = Date.now()): Promis
       await db.run("DELETE FROM image_generation_events WHERE created_at < ?", cleanupBefore);
 
       const recent = await db.get<{ count: number }>(
-        "SELECT COUNT(*) AS count FROM image_generation_events WHERE guild_id = ? AND created_at >= ?",
+        "SELECT COUNT(*) AS count FROM image_generation_events WHERE guild_id = ? AND created_at >= ? AND (status = 'succeeded' OR (status = 'reserved' AND created_at >= ?))",
         guildId,
         now - IMAGE_GENERATION_WINDOW_MS,
+        now - IMAGE_REQUEST_TIMEOUT_MS - 30_000,
       );
       const today = await db.get<{ count: number }>(
         "SELECT COUNT(*) AS count FROM image_generation_events WHERE guild_id = ? AND created_at >= ? AND (status = 'succeeded' OR (status = 'reserved' AND created_at >= ?))",
@@ -49,9 +50,10 @@ async function reserveImageGeneration(guildId: string, now = Date.now()): Promis
         now - IMAGE_REQUEST_TIMEOUT_MS - 30_000,
       );
       const oldest = await db.get<{ created_at: number | null }>(
-        "SELECT MIN(created_at) AS created_at FROM image_generation_events WHERE guild_id = ? AND created_at >= ?",
+        "SELECT MIN(created_at) AS created_at FROM image_generation_events WHERE guild_id = ? AND created_at >= ? AND (status = 'succeeded' OR (status = 'reserved' AND created_at >= ?))",
         guildId,
         now - IMAGE_GENERATION_WINDOW_MS,
+        now - IMAGE_REQUEST_TIMEOUT_MS - 30_000,
       );
 
       const decision = evaluateImageGenerationQuota({

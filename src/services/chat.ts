@@ -245,9 +245,6 @@ export async function runChat(args: {
   }
   if (!(await isChannelAllowed(args.guildId, args.channelId))) throw new Error("I am not enabled in this channel.");
   const existingAfk = await getAfkStatus(args.user.id, args.guildId);
-  if (existingAfk) {
-    await clearAfkStatus(args.user.id, args.guildId);
-  }
 
   const threadId = getThreadChannelId(args.channel);
   const baseConversationChannelId = threadId ?? args.channelId;
@@ -260,8 +257,13 @@ export async function runChat(args: {
 
   activePrompts.add(key);
   let voiceReservation: VoiceReservation | undefined;
+  let afkCleared = false;
 
   try {
+    if (existingAfk) {
+      await clearAfkStatus(args.user.id, args.guildId);
+      afkCleared = true;
+    }
     if ("sendTyping" in args.channel) await args.channel.sendTyping();
     const placeholder = await args.reply("Thinking…");
     const editResponse = args.edit ?? (content => placeholder.edit(content));
@@ -659,5 +661,6 @@ export async function runChat(args: {
   } finally {
     voiceReservation?.cancel();
     activePrompts.delete(key);
+    if (existingAfk && !afkCleared) await clearAfkStatus(args.user.id, args.guildId).catch(() => undefined);
   }
 }

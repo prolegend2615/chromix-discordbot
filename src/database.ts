@@ -27,6 +27,7 @@ export const dbPromise = (async () => {
     ["timers", "delivery_attempts", "INTEGER NOT NULL DEFAULT 0"], ["timers", "retry_at", "INTEGER"], ["timers", "last_error", "TEXT"],
     ["scheduled_posts", "delivery_attempts", "INTEGER NOT NULL DEFAULT 0"], ["scheduled_posts", "retry_at", "INTEGER"], ["scheduled_posts", "last_error", "TEXT"],
     ["polls", "delivery_attempts", "INTEGER NOT NULL DEFAULT 0"], ["polls", "retry_at", "INTEGER"], ["polls", "last_error", "TEXT"],
+    ["giveaways", "delivery_attempts", "INTEGER NOT NULL DEFAULT 0"], ["giveaways", "retry_at", "INTEGER"], ["giveaways", "last_error", "TEXT"],
   ] as const) await addColumn(table, column, definition);
   const columns = await db.all<{ name: string }[]>("PRAGMA table_info(user_settings)");
   if (!columns.some(c => c.name === "provider")) await db.exec("ALTER TABLE user_settings ADD COLUMN provider TEXT NOT NULL DEFAULT 'gemini'");

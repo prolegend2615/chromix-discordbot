@@ -25,6 +25,9 @@ export type Giveaway = {
   winner_ids_json: string | null;
   created_at: number;
   ended_at: number | null;
+  delivery_attempts: number;
+  retry_at: number | null;
+  last_error: string | null;
 };
 
 export async function resolveGiveawayRole(guild: Guild, roleInput: string | null) {
@@ -130,8 +133,8 @@ export async function leaveGiveaway(id: number, userId: string): Promise<Giveawa
 
 export async function getDueGiveaways(now = Date.now()): Promise<Giveaway[]> {
   return (await dbPromise).all<Giveaway[]>(
-    "SELECT * FROM giveaways WHERE (status='active' AND ends_at<=?) OR status='drawing' ORDER BY ends_at,id",
-    now,
+    "SELECT * FROM giveaways WHERE (status='active' AND ends_at<=?) OR (status='drawing' AND (retry_at IS NULL OR retry_at<=?)) ORDER BY ends_at,id",
+    now, now,
   );
 }
 
@@ -170,6 +173,19 @@ export async function markGiveawayEnded(id: number) {
     Date.now(),
     id,
   );
+}
+
+export async function markGiveawayDeliveryFailure(giveaway: Giveaway, error: unknown) {
+  const db = await dbPromise;
+  const attempts = Number(giveaway.delivery_attempts ?? 0) + 1;
+  const message = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+  if (attempts >= 3) {
+    await db.run("INSERT INTO scheduled_delivery_failures(kind,action_id,guild_id,creator_id,error,created_at) VALUES(?,?,?,?,?,?)", "giveaway", giveaway.id, giveaway.guild_id, giveaway.creator_id, message, Date.now());
+    await db.run("UPDATE giveaways SET status='ended',ended_at=?,delivery_attempts=?,retry_at=NULL,last_error=? WHERE id=? AND (status='drawing' OR (status='active' AND ends_at<=?))", Date.now(), attempts, message, giveaway.id, Date.now());
+    return { failed: true, attempts };
+  }
+  await db.run("UPDATE giveaways SET status='drawing',delivery_attempts=?,retry_at=?,last_error=? WHERE id=? AND (status='drawing' OR (status='active' AND ends_at<=?))", attempts, Date.now() + 60_000, message, giveaway.id, Date.now());
+  return { failed: false, attempts };
 }
 
 export async function setGiveawayManagerRole(guildId: string, role: { id: string; name: string } | null) {

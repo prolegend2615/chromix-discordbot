@@ -24,7 +24,7 @@ export async function createPoll(input: { guildId: string; channelId: string; cr
     throw new Error("A poll needs a question and 2–10 distinct options.");
   }
   const db = await dbPromise;
-  const recentCount = await db.get<{ count: number }>("SELECT COUNT(*) AS count FROM polls WHERE guild_id=? AND created_at>?", input.guildId, Date.now() - 24 * 60 * 60_000);
+  const recentCount = await db.get<{ count: number }>("SELECT COUNT(*) AS count FROM polls WHERE guild_id=? AND created_at>? AND status NOT IN ('cancelled','failed')", input.guildId, Date.now() - 24 * 60 * 60_000);
   if (Number(recentCount?.count ?? 0) >= 20) throw new Error("This server has reached its limit of 20 polls per day.");
   const result = await (await dbPromise).run(
     "INSERT INTO polls(guild_id,channel_id,creator_id,question,options_json,scheduled_at,status,created_at) VALUES(?,?,?,?,?,?,'scheduled',?)",

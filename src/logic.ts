@@ -74,7 +74,29 @@ export function readToolActionArguments(text: string, name: string, argumentCoun
 }
 
 export function hasToolAction(text: string): boolean {
-  return /\buse\s+(?:set_afk|set_reminder|sam_speak|show_avatar|generate_image|create_poll|set_timer|schedule_message|get_recent_messages|create_giveaway|create_role|create_channel|create_category|create_layout|delete_channel|delete_category|view_channels|configure_community|rock_paper_scissors|tic_tac_toe|search_(?:brave|exa))\b/i.test(text);
+	return Boolean(
+		parseSetAfkCommand(text)
+		|| parseSetReminderCommand(text)
+		|| parseSamSpeakCommand(text)
+		|| parseShowAvatarCommand(text)
+		|| parseGenerateImageCommand(text)
+		|| parseCreatePollCommand(text)
+		|| parseSetTimerCommand(text)
+		|| parseScheduleMessageCommand(text)
+		|| parseGetRecentMessagesCommand(text)
+		|| parseCreateGiveawayCommand(text)
+		|| parseWebSearchCommand(text)
+		|| readAction(text, "create_role", 2)
+		|| readAction(text, "create_channel")
+		|| readAction(text, "create_category", 1)
+		|| readAction(text, "create_layout")
+		|| readAction(text, "delete_channel", 1)
+		|| readAction(text, "delete_category", 1)
+		|| readNoArgAction(text, "view_channels")
+		|| readAction(text, "configure_community", 2)
+		|| parseRockPaperScissorsCommand(text)
+		|| parseTicTacToeCommand(text)
+	);
 }
 
 export function parseGetRecentMessagesCommand(text: string): { count: number } | null {
@@ -405,82 +427,6 @@ export function getTicTacToeBotMoves(board: TicTacToeBoard): number[] {
 
 // --- Channel Management Action ---
 
-export type ChannelManagementCommand =
-  | { action: "create_role"; name: string; color: string }
-  | { action: "create_channel"; name: string; categoryId?: string }
-  | { action: "create_category"; name: string }
-  | { action: "create_layout"; groups: Array<{ categoryName?: string; channels: string[] }> }
-  | { action: "delete_channel"; channelId: string }
-  | { action: "delete_category"; categoryId: string };
-
 export function hasChannelManagementIntent(text: string): boolean {
   return /\b(?:create|make|new|delete|remove)\b[\s\S]{0,100}\b(?:channel|category)\b/i.test(text);
-}
-
-/**
- * Parses AI channel management commands:
- *  - `use create_channel (name)`
- *  - `use create_channel (name) (categoryId)`
- *  - `use create_category (name)`
- *  - `use delete_channel (channelId)`
- *  - `use delete_category (categoryId)`
- */
-export function parseChannelManagementCommand(text: string): ChannelManagementCommand | null {
-  let match = /^\s*use\s+create_role\s*\(([\s\S]*?)\)\s*\(([\s\S]*?)\)\s*$/i.exec(text);
-  if (match) {
-    const name = match[1]?.trim().replace(/\s+/gu, " ");
-    const color = match[2]?.trim();
-    if (!name || name.length > 100 || /[\r\n\u0000-\u001f]/u.test(name) || !color || !/^#?[\da-f]{6}$/i.test(color)) return null;
-    return { action: "create_role", name, color: color.startsWith("#") ? color.toUpperCase() : `#${color.toUpperCase()}` };
-  }
-
-  const layoutArgs = readAction(text, "create_layout");
-  if (layoutArgs) {
-    if (layoutArgs.length < 2 || layoutArgs.length % 2 !== 0) return null;
-    const groups: Array<{ categoryName?: string; channels: string[] }> = [];
-    for (let index = 0; index < layoutArgs.length; index += 2) {
-      const category = layoutArgs[index].trim();
-      const uncategorized = /^none$/i.test(category);
-      const categoryName = uncategorized ? undefined : category;
-      const channels = layoutArgs[index + 1].split("|").map(name => name.trim()).filter(Boolean);
-      if ((!uncategorized && !categoryName) || channels.length === 0) return null;
-      groups.push({ categoryName, channels });
-    }
-    return { action: "create_layout", groups };
-  }
-
-  // Create channel: use create_channel (name) or use create_channel (name) (categoryId)
-  match = /^\s*use\s+create_channel\s*\(([\s\S]*?)\)\s*(?:\(([\s\S]*?)\))?\s*$/i.exec(text);
-  if (match) {
-    const name = match[1]?.trim();
-    const categoryId = match[2]?.trim();
-    if (!name) return null;
-    return { action: "create_channel", name, categoryId: categoryId || undefined };
-  }
-
-  // Create category: use create_category (name)
-  match = /^\s*use\s+create_category\s*\(([\s\S]*?)\)\s*$/i.exec(text);
-  if (match) {
-    const name = match[1]?.trim();
-    if (!name) return null;
-    return { action: "create_category", name };
-  }
-
-  // Delete channel: use delete_channel (channelId)
-  match = /^\s*use\s+delete_channel\s*\(([\s\S]*?)\)\s*$/i.exec(text);
-  if (match) {
-    const channelId = match[1].trim();
-    if (!channelId) return null;
-    return { action: "delete_channel", channelId };
-  }
-
-  // Delete category: use delete_category (categoryId)
-  match = /^\s*use\s+delete_category\s*\(([\s\S]*?)\)\s*$/i.exec(text);
-  if (match) {
-    const categoryId = match[1].trim();
-    if (!categoryId) return null;
-    return { action: "delete_category", categoryId };
-  }
-
-  return null;
 }

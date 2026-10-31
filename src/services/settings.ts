@@ -13,7 +13,7 @@ export async function getSettings(u:string,g?:string):Promise<Settings>{
    const rpSource=roleplayRecord??row;
    const responseStyle=vip&&row?.response_style&&RESPONSE_STYLES.includes(row.response_style as ResponseStyle)?row.response_style as ResponseStyle:"Natural";
   const rp={rp_enabled:rpSource?.rp_enabled??0,rp_relationship:rpSource?.rp_relationship??"none",rp_traits:rpSource?.rp_traits??"[]",rp_intensity:rpSource?.rp_intensity??"balanced",rp_name:rpSource?.rp_name??""};
-   if(row){if(row.vip!==vip||row.vip_expires_at!==vipExpiresAt||row.response_style!==responseStyle||row.rp_enabled!==rp.rp_enabled||row.rp_relationship!==rp.rp_relationship||row.rp_traits!==rp.rp_traits||row.rp_intensity!==rp.rp_intensity||row.rp_name!==rp.rp_name)await db.run("UPDATE user_settings SET vip=?,vip_expires_at=?,response_style=?,rp_enabled=?,rp_relationship=?,rp_traits=?,rp_intensity=?,rp_name=?,updated_at=? WHERE user_id=? AND guild_id=?",vip,vipExpiresAt,responseStyle,rp.rp_enabled,rp.rp_relationship,rp.rp_traits,rp.rp_intensity,rp.rp_name,now,u,s);return{...row,vip,vip_expires_at:vipExpiresAt,response_style:responseStyle,...rp};}
+   if(row)return{...row,vip,vip_expires_at:vipExpiresAt,response_style:responseStyle,...rp};
   await db.run("INSERT INTO user_settings(user_id,guild_id,vip,vip_expires_at,rp_enabled,rp_relationship,rp_traits,rp_intensity,rp_name,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",u,s,vip,vipExpiresAt,rp.rp_enabled,rp.rp_relationship,rp.rp_traits,rp.rp_intensity,rp.rp_name,now);
   return{user_id:u,guild_id:s,...defaults,vip,vip_expires_at:vipExpiresAt,...rp};
 }
