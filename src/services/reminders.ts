@@ -69,7 +69,7 @@ export async function createReminder(args: {
 export async function getDueReminders(now = Date.now()): Promise<Reminder[]> {
   const db = await dbPromise;
   return db.all<Reminder[]>(
-    "SELECT id, user_id, guild_id, channel_id, message, remind_at, created_at, delivery_attempts, retry_at, last_error FROM reminders WHERE remind_at <= ? AND delivery_attempts < 3 AND (retry_at IS NULL OR retry_at <= ?) ORDER BY remind_at ASC, id ASC",
+    "SELECT id, user_id, guild_id, channel_id, message, remind_at, created_at, delivery_attempts, retry_at, last_error FROM reminders WHERE remind_at <= ? AND (retry_at IS NULL OR retry_at <= ?) ORDER BY remind_at ASC, id ASC",
     now, now,
   );
 }
@@ -78,6 +78,7 @@ export async function deleteReminder(id: number) {
   const db = await dbPromise;
   await db.run("DELETE FROM reminders WHERE id=?", id);
 }
+
 export async function getUserReminders(userId: string, guildId?: string) {
   return (await dbPromise).all<Reminder[]>("SELECT id,user_id,guild_id,channel_id,message,remind_at,created_at,delivery_attempts,retry_at,last_error FROM reminders WHERE user_id=? AND guild_id=? ORDER BY remind_at", userId, guildId ?? "");
 }
@@ -91,6 +92,11 @@ export async function markReminderDeliveryFailure(reminder: Reminder, error: unk
   const db = await dbPromise;
   const attempts = Number(reminder.delivery_attempts ?? 0) + 1;
   const message = (error instanceof Error ? error.message : String(error)).slice(0, 500);
-  await db.run("UPDATE reminders SET delivery_attempts=?,retry_at=?,last_error=? WHERE id=?", attempts, attempts >= 3 ? null : Date.now() + 60_000, message, reminder.id);
-  return { failed: attempts >= 3, attempts };
+  if (attempts >= 3) {
+    await db.run("INSERT INTO scheduled_delivery_failures(kind,action_id,guild_id,creator_id,error,created_at) VALUES(?,?,?,?,?,?)", "reminder", reminder.id, reminder.guild_id, reminder.user_id, message, Date.now());
+    await db.run("DELETE FROM reminders WHERE id=?", reminder.id);
+    return { failed: true, attempts };
+  }
+  await db.run("UPDATE reminders SET delivery_attempts=?,retry_at=?,last_error=? WHERE id=?", attempts, Date.now() + 60_000, message, reminder.id);
+  return { failed: false, attempts };
 }

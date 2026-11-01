@@ -1,42 +1,155 @@
-import type { Message, User, GuildMember, TextBasedChannel } from "discord.js";
+import { ChannelType, PermissionsBitField, type Message, type MessageCreateOptions, type User, type GuildMember, type TextBasedChannel } from "discord.js";
 import { getSettings } from "./settings.js";
-import { addHistory, getHistory } from "./history.js";
-import { checkPromptLimit, isChannelAllowed } from "./access.js";
+import { addHistory, getHistory, pruneHistory, replaceHistoryWithSummary, replaceLastAssistant } from "./history.js";
+import { conversationChannelId as chatConversationChannelId, getCurrentChat } from "./chats.js";
+import { getGuildConfig } from "./guild-config.js";
+import { formatPersonalMemories, listPersonalMemories } from "./memory.js";
+import { checkPromptLimit, isChannelAllowed, releaseAttachmentUploadReservations, reserveAttachmentUploads } from "./access.js";
 import { streamAnswer } from "./ai.js";
 import { recordResponseMetric, resolveThreadConversationKey } from "./metrics.js";
 import { clearAfkStatus, getAfkStatus, normalizeAfkReason, setAfkStatus, type AfkStatus } from "./afk.js";
-import { formatReminderDuration, hasImageGenerationIntent, hasReminderIntent, hasTtsIntent, parseGenerateImageCommand, parseReminderDuration, parseSamSpeakCommand, parseSetAfkCommand, parseSetReminderCommand } from "../logic.js";
-import { generateGuildImage } from "./image-generation.js";
+import {
+  formatReminderDuration,
+  hasImageGenerationIntent,
+  hasPollIntent,
+  hasScheduleMessageIntent,
+  hasReminderIntent,
+  hasRockPaperScissorsIntent,
+  hasTicTacToeIntent,
+  hasTtsIntent,
+  hasTimerIntent,
+  parseGenerateImageCommand,
+  parseCreatePollCommand,
+  parseScheduleMessageCommand,
+  parseReminderDuration,
+  parseRockPaperScissorsCommand,
+  parseSamSpeakCommand,
+  parseSetAfkCommand,
+  parseSetReminderCommand,
+  parseSetTimerCommand,
+  parseShowAvatarCommand,
+  parseTicTacToeCommand,
+  hasToolAction,
+  parseCreateGiveawayCommand,
+  parseGetRecentMessagesCommand,
+} from "../logic.js";
 import { createReminder } from "./reminders.js";
 import { reserveVoiceMessage, type VoiceReservation } from "./tts.js";
+import { generateGuildImage } from "./image-generation.js";
+import {
+  executeChannelManagementCommand,
+  diagnoseChannelActionPermission,
+  parseChannelManagementCommand,
+  type ChannelManagementCommand,
+} from "./channel-management.js";
+import { config } from "../config.js";
+import { runWebSearchAgent, searchWeb, formatWebSearchSources } from "./web-search.js";
+import { createPoll, buildPollPayload, getPoll, publishPoll } from "./polls.js";
+import { createScheduledPost, createTimer, parseScheduleDuration } from "./scheduled-actions.js";
+import { buildGiveawayPayload, canManageGiveaways, createGiveaway, deleteGiveaway, getGiveaway, publishGiveaway, resolveGiveawayRole } from "./giveaways.js";
+import { prepareAttachments, validateAttachmentInputs, type DiscordAttachmentInput } from "./attachments.js";
 
 const activePrompts = new Set<string>();
+const serverFactsCache = new Map<string, { expiresAt: number; facts: string }>();
 const DISCORD_MESSAGE_LIMIT = 2000;
 
 type SendableTextChannel = TextBasedChannel & {
-  send: (content: string) => Promise<Message>;
+  send: (content: string | MessageCreateOptions) => Promise<Message>;
 };
 
 function isSendableTextChannel(channel: TextBasedChannel): channel is SendableTextChannel {
   return "send" in channel && typeof channel.send === "function";
 }
 
-function splitDiscordMessage(content: string): string[] {
+function splitDiscordMessage(content: string, limit = DISCORD_MESSAGE_LIMIT): string[] {
   if (!content) return ["I could not generate a response."];
   const chunks: string[] = [];
   let remaining = content;
 
-  while (remaining.length > DISCORD_MESSAGE_LIMIT) {
-    const candidate = remaining.slice(0, DISCORD_MESSAGE_LIMIT);
+  while (remaining.length > limit) {
+    const candidate = remaining.slice(0, limit);
     const newline = candidate.lastIndexOf("\n");
     const space = candidate.lastIndexOf(" ");
     const splitAt = Math.max(newline, space);
-    const cutAt = splitAt > 0 ? splitAt : DISCORD_MESSAGE_LIMIT;
+    const cutAt = splitAt > 0 ? splitAt : limit;
     chunks.push(remaining.slice(0, cutAt));
     remaining = remaining.slice(cutAt).replace(/^[ \n]+/, "");
   }
   if (remaining) chunks.push(remaining);
   return chunks;
+}
+
+function createStreamingEditor(editFirst: (content: string) => Promise<unknown>, sendNext: (content: string) => Promise<Message>) {
+  let draft = "";
+  const published: string[] = [];
+  const extraMessages: Message[] = [];
+  let lastEditAt = 0;
+  let bufferedCharacters = 0;
+  let editError: unknown;
+  let pending = Promise.resolve();
+  let actionDetected = false;
+
+  const enqueueReconcile = (final = false) => {
+    const chunks = splitDiscordMessage(draft, 1900);
+    if (!final && chunks.length > 1 && chunks[chunks.length - 1].length < 35) chunks.pop();
+    pending = pending.then(async () => {
+      for (let index = 0; index < chunks.length; index += 1) {
+        const content = chunks[index];
+        if (published[index] === content) continue;
+        if (index === 0) await editFirst(content);
+        else if (extraMessages[index - 1]) await extraMessages[index - 1].edit(content);
+        else extraMessages[index - 1] = await sendNext(content);
+        published[index] = content;
+      }
+      if (final) {
+        while (published.length > chunks.length) {
+          const index = published.length - 1;
+          if (index > 0) await extraMessages[index - 1]?.delete().catch(() => undefined);
+          extraMessages.splice(index - 1, 1);
+          published.pop();
+        }
+      }
+    }).then(() => { editError = undefined; }).catch(error => { editError = error; });
+  };
+
+  return {
+    push(text: string) {
+      draft += text;
+      bufferedCharacters += text.length;
+      if (hasToolAction(draft)) {
+        actionDetected = true;
+        return;
+      }
+      if (actionDetected) return;
+      const chunks = splitDiscordMessage(draft, 1900);
+      const messageBoundaryReached = chunks.length > 1 && chunks.length > Math.max(1, published.length);
+      if (draft.trim() && (messageBoundaryReached || (bufferedCharacters >= 60 && Date.now() - lastEditAt >= 900))) {
+        enqueueReconcile();
+        bufferedCharacters = 0;
+        lastEditAt = Date.now();
+      }
+    },
+    async finish(finalText = draft) {
+      draft = finalText;
+      if (!hasToolAction(draft) && draft.trim()) enqueueReconcile(true);
+      await pending;
+      if (editError) throw editError;
+    },
+    async reset(status = "Retrying with another AI provider…") {
+      await pending;
+      for (const message of extraMessages) await message.delete().catch(() => undefined);
+      extraMessages.length = 0;
+      published.length = 0;
+      draft = "";
+      actionDetected = false;
+      editError = undefined;
+      bufferedCharacters = 0;
+      lastEditAt = Date.now();
+      pending = pending.then(() => editFirst(status)).then(() => { editError = undefined; }).catch(error => { editError = error; });
+      await pending;
+      published.push(status);
+    },
+  };
 }
 
 function getThreadChannelId(channel: TextBasedChannel): string | undefined {
@@ -45,25 +158,98 @@ function getThreadChannelId(channel: TextBasedChannel): string | undefined {
   return typeof threadId === "string" ? threadId : undefined;
 }
 
+async function getServerFacts(channel: TextBasedChannel): Promise<string> {
+  if (!("guild" in channel) || !channel.guild) return "";
+  const guild = channel.guild;
+  const cached = serverFactsCache.get(guild.id);
+  if (cached && cached.expiresAt > Date.now()) return cached.facts;
+  let ownerName = "Unavailable";
+  try {
+    const owner = guild.members.cache.get(guild.ownerId) ?? await guild.fetchOwner();
+    ownerName = owner.user.globalName ?? owner.user.username;
+  } catch { /* Server facts should not block an otherwise useful answer. */ }
+  const channels = guild.channels.cache;
+  const roles = guild.roles.cache.filter(role => role.id !== guild.id).sort((a, b) => b.position - a.position);
+  const highestRole = roles.first()?.name ?? "None";
+  const channelCount = channels.size;
+  const textChannelCount = channels.filter(item => item?.type === ChannelType.GuildText || item?.type === ChannelType.GuildAnnouncement).size;
+  const voiceChannelCount = channels.filter(item => item?.type === ChannelType.GuildVoice || item?.type === ChannelType.GuildStageVoice).size;
+  const categoryCount = channels.filter(item => item?.type === ChannelType.GuildCategory).size;
+  const facts = [
+    `Server owner: ${ownerName}`,
+    `Member count: ${guild.memberCount}`,
+    `Highest role: ${highestRole}`,
+    `Channel count: ${channelCount} total including ${categoryCount} categories (${textChannelCount} text/announcement, ${voiceChannelCount} voice/stage).`,
+  ].join("\n");
+  serverFactsCache.set(guild.id, { expiresAt: Date.now() + 15 * 60_000, facts });
+  return facts;
+}
+
+async function fetchRecentChannelMessages(channel: TextBasedChannel, count: number, excludeMessageId?: string): Promise<string> {
+  if (!("messages" in channel) || !channel.messages || typeof channel.messages.fetch !== "function") {
+    return "Recent messages are unavailable for this channel type.";
+  }
+  try {
+    const messages = await channel.messages.fetch({ limit: Math.min(100, count + (excludeMessageId ? 1 : 0)) });
+    const recent = [...messages.values()]
+      .filter(message => message.id !== excludeMessageId)
+      .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+      .slice(-count);
+    if (!recent.length) return "No earlier messages were available in this channel.";
+    return recent.map(message => {
+      const author = message.member?.displayName ?? message.author.globalName ?? message.author.username;
+      const content = message.content.trim() || "[No text content]";
+      const attachments = message.attachments.size
+        ? ` [Attachments: ${[...message.attachments.values()].map(file => file.name ?? "unnamed file").join(", ")}]`
+        : "";
+      return `[${new Date(message.createdTimestamp).toISOString()}] ${author}: ${(content + attachments).slice(0, 1200)}`;
+    }).join("\n").slice(-16_000);
+  } catch {
+    return "I could not read recent messages. The bot may not have permission to view message history in this channel.";
+  }
+}
+
 export async function runChat(args: {
-  prompt: string; user: User; member: GuildMember | null; guildId?: string; guildName?: string;
-  channel: TextBasedChannel; channelId: string; messageTimestamp?: number; sourceMessageId?: string; referencedMessageId?: string;
+  prompt: string;
+  attachments?: DiscordAttachmentInput[];
+  adminChat?: boolean;
+  user: User;
+  member: GuildMember | null;
+  guildId?: string;
+  guildName?: string;
+  channel: TextBasedChannel;
+  channelId: string;
+  messageTimestamp?: number;
+  sourceMessageId?: string;
+  referencedMessageId?: string;
   reply: (content: string) => Promise<Message>;
   edit?: (content: string) => Promise<unknown>;
   onAfkSet?: (reason: string, placeholder: Message) => Promise<void>;
   onReminderSet?: (seconds: number, message: string, placeholder: Message) => Promise<void>;
+  onAvatar?: (target: string, placeholder: Message) => Promise<void>;
+  onRockPaperScissors?: (placeholder: Message) => Promise<void>;
+  onTicTacToe?: (placeholder: Message) => Promise<void>;
   onWelcomeBack?: (status: AfkStatus) => Promise<void>;
+  onAdminConfirmation?: (command: ChannelManagementCommand, placeholder: Message) => Promise<void>;
+  compactHistory?: boolean;
+  regenerate?: boolean;
 }) {
-  const prompt = args.prompt.trim();
+  const attachmentInputs = args.attachments ?? [];
+  let prompt = args.prompt.trim() || (attachmentInputs.length ? "Please analyze the attached file(s) and help me understand them." : "");
   if (!prompt) throw new Error("Please include a message for me to answer.");
-  if (hasImageGenerationIntent(prompt) && !args.guildId) throw new Error("Image generation is only available in a Discord server, not in direct messages.");
+  if (args.adminChat && (!args.guildId || (!args.member?.permissions.has(PermissionsBitField.Flags.Administrator) && !args.member?.permissions.has(PermissionsBitField.Flags.ManageChannels) && !args.member?.permissions.has(PermissionsBitField.Flags.ManageRoles) && !args.member?.permissions.has(PermissionsBitField.Flags.ManageGuild)))) {
+    throw new Error("You need Manage Channels, Manage Roles, Manage Server, or Administrator permission for admin actions.");
+  }
+  if (hasImageGenerationIntent(prompt) && !args.guildId) {
+    throw new Error("Image generation is only available in a Discord server, not in direct messages.");
+  }
   if (!(await isChannelAllowed(args.guildId, args.channelId))) throw new Error("I am not enabled in this channel.");
   const existingAfk = await getAfkStatus(args.user.id, args.guildId);
-  if (existingAfk) {
-    await clearAfkStatus(args.user.id, args.guildId);
-  }
+
   const threadId = getThreadChannelId(args.channel);
-  const conversationChannelId = threadId ?? args.channelId;
+  const baseConversationChannelId = threadId ?? args.channelId;
+  const currentChat = await getCurrentChat(args.user.id, args.guildId, baseConversationChannelId);
+  const conversationChannelId = chatConversationChannelId(baseConversationChannelId, currentChat.chat_id);
   const key = resolveThreadConversationKey(args.guildId, threadId, args.user.id);
   if (activePrompts.has(key)) throw new Error("I am already answering your previous prompt.");
   const limit = await checkPromptLimit(args.user.id);
@@ -71,42 +257,247 @@ export async function runChat(args: {
 
   activePrompts.add(key);
   let voiceReservation: VoiceReservation | undefined;
+  let afkCleared = false;
+
   try {
+    if (existingAfk) {
+      await clearAfkStatus(args.user.id, args.guildId);
+      afkCleared = true;
+    }
     if ("sendTyping" in args.channel) await args.channel.sendTyping();
     const placeholder = await args.reply("Thinking…");
     const editResponse = args.edit ?? (content => placeholder.edit(content));
-    if (hasTtsIntent(prompt)) {
+    const streamingEditor = createStreamingEditor(editResponse, async content => {
+      if (!isSendableTextChannel(args.channel)) throw new Error("This channel cannot receive additional response messages.");
+      return args.channel.send({ content, allowedMentions: { parse: [] } });
+    });
+
+    if (!args.adminChat && hasTtsIntent(prompt)) {
       voiceReservation = reserveVoiceMessage({ channel: args.channel, channelId: args.channelId });
       await editResponse("Generating voice…").catch(() => undefined);
     }
+
     if (existingAfk) await args.onWelcomeBack?.(existingAfk);
+
     const settings = await getSettings(args.user.id, args.guildId);
-    const history = await getHistory(args.user.id, args.guildId, conversationChannelId, settings.vip ? 12 : 5);
-    // discord.js uses camelCase property names: User.globalName, User.username,
-    // GuildMember.displayName, GuildMember.nickname, and Guild.name.
+    if (args.regenerate && !settings.vip) throw new Error("Regenerate is a VIP feature.");
+    if (args.guildId) {
+      const serverConfig = await getGuildConfig(args.guildId);
+      await pruneHistory(args.guildId, serverConfig.retention_days);
+    }
+    let preparedAttachments = [] as Awaited<ReturnType<typeof prepareAttachments>>;
+    try {
+      const attachmentDescriptors = validateAttachmentInputs(attachmentInputs, Boolean(settings.vip));
+      if (attachmentDescriptors.length) {
+        const reservation = await reserveAttachmentUploads(args.user.id, Boolean(settings.vip), attachmentDescriptors.length);
+        if (!reservation.ok) {
+          throw new Error(`You have ${reservation.remaining} of ${reservation.limit} attachment uploads left in this rolling hour. ${settings.vip ? "VIP users get 20 uploads per hour, 25 MB per file, and 50 MB total." : "Free users get 3 uploads per hour."}`);
+        }
+        try {
+          preparedAttachments = await prepareAttachments(attachmentDescriptors, Boolean(settings.vip));
+        } catch (error) {
+          await releaseAttachmentUploadReservations(reservation.eventIds);
+          throw error;
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "I couldn't read those attachments.";
+      await editResponse(message).catch(() => undefined);
+      return;
+    }
+    let history = args.adminChat
+      ? []
+      : await getHistory(args.user.id, args.guildId, conversationChannelId, settings.vip ? 50 : 5);
+    let regeneratingExistingAnswer = false;
+    if (args.regenerate) {
+      const lastAssistantIndex = history.map(item => item.role).lastIndexOf("assistant");
+      const previousUser = lastAssistantIndex > 0 ? history[lastAssistantIndex - 1] : undefined;
+      if (lastAssistantIndex < 0 || !previousUser || previousUser.role !== "user") throw new Error("There is no previous answer to regenerate in this chat.");
+      prompt = previousUser.content;
+      history = history.slice(0, lastAssistantIndex - 1);
+      regeneratingExistingAnswer = true;
+    }
+    const personalMemories = !args.adminChat && settings.vip ? formatPersonalMemories(await listPersonalMemories(args.user.id)) : "";
+
     const userName = args.user.globalName ?? args.user.username;
     const serverNickname = args.member?.nickname ?? "None";
+    const serverFacts = await getServerFacts(args.channel);
     const startedAt = Date.now();
-    let answer = "";
-    await streamAnswer({
-      prompt,
-      userName,
-      serverNickname,
-      guildName: args.guildName ?? "Direct Message",
-      settings,
-      history,
-      messageTimestamp: args.messageTimestamp ?? Date.now(),
-       reminderActionEnabled: hasReminderIntent(prompt),
-      ttsActionEnabled: hasTtsIntent(prompt),
-      imageGenerationActionEnabled: hasImageGenerationIntent(prompt),
-      onDelta: text => { answer += text; },
+    let recentMessagesContext = "";
+    let recentMessagesUsed = false;
+    const webSearch = await runWebSearchAgent({
+      enabled: !args.adminChat,
+      ask: async context => {
+        for (let actionTurn = 0; actionTurn < 2; actionTurn += 1) {
+          let response = "";
+          await streamAnswer({
+            prompt,
+            userName,
+            serverNickname,
+            guildName: args.guildName ?? "Direct Message",
+            serverFacts,
+            recentMessagesActionEnabled: !args.adminChat && Boolean(args.guildId),
+            recentMessagesContext,
+            personalMemories,
+            attachments: preparedAttachments,
+            settings,
+            history,
+            messageTimestamp: args.messageTimestamp ?? Date.now(),
+            adminChatActionEnabled: args.adminChat,
+            reminderActionEnabled: !args.adminChat && hasReminderIntent(prompt)
+              && !hasScheduleMessageIntent(prompt) && !hasPollIntent(prompt) && !hasTimerIntent(prompt),
+            pollActionEnabled: !args.adminChat && Boolean(args.guildId) && hasPollIntent(prompt),
+            timerActionEnabled: !args.adminChat && hasTimerIntent(prompt),
+            scheduledMessageActionEnabled: !args.adminChat && Boolean(args.guildId) && hasScheduleMessageIntent(prompt),
+            ttsActionEnabled: !args.adminChat && hasTtsIntent(prompt),
+            imageGenerationActionEnabled: !args.adminChat && hasImageGenerationIntent(prompt),
+            rockPaperScissorsActionEnabled: !args.adminChat && hasRockPaperScissorsIntent(prompt),
+            ticTacToeActionEnabled: !args.adminChat && hasTicTacToeIntent(prompt),
+            webSearchActionEnabled: context.availableProviders.length > 0,
+            webSearchAvailableProviders: context.availableProviders,
+            webSearchFeedback: context.feedback,
+            onDelta: text => {
+              response += text;
+              streamingEditor.push(text);
+            },
+            onProviderRetry: async remainingAttempts => {
+              response = "";
+              await streamingEditor.reset(remainingAttempts > 0 ? "Retrying with another AI provider…" : "The AI provider failed.");
+            },
+          });
+          const recentMessagesCommand = args.adminChat ? null : parseGetRecentMessagesCommand(response);
+          if (!recentMessagesCommand) {
+            if (/\buse\s+get_recent_messages\b/i.test(response)) return "I couldn't retrieve the channel context for that request.";
+            return response;
+          }
+          if (!args.guildId || recentMessagesUsed) return "I couldn't retrieve the channel context for that request.";
+          recentMessagesUsed = true;
+          recentMessagesContext = await fetchRecentChannelMessages(args.channel, recentMessagesCommand.count, args.sourceMessageId);
+          await streamingEditor.reset("Checking recent channel messages…");
+        }
+        return "I couldn't retrieve the channel context for that request.";
+      },
+      search: (provider, query) => searchWeb(provider, query, {
+        apiKey: provider === "brave" ? config.braveSearchApiKey : config.exaApiKey,
+      }),
+      onSearchStart: () => streamingEditor.reset("Searching the web…"),
     });
-    const afkCommand = parseSetAfkCommand(answer);
-    // Like the AFK protocol, the complete AI action syntax is the execution trigger.
-    // Intent detection only controls whether the extra reminder instructions are sent.
-    const reminderCommand = parseSetReminderCommand(answer);
-    const imageCommand = parseGenerateImageCommand(answer);
+    let answer = webSearch.answer;
+
+    const afkCommand = args.adminChat ? null : parseSetAfkCommand(answer);
+    const reminderCommand = args.adminChat ? null : parseSetReminderCommand(answer);
+    const pollCommand = args.adminChat ? null : parseCreatePollCommand(answer);
+    const timerCommand = args.adminChat ? null : parseSetTimerCommand(answer);
+    const scheduledMessageCommand = args.adminChat ? null : parseScheduleMessageCommand(answer);
+    const avatarCommand = args.adminChat ? null : parseShowAvatarCommand(answer);
+    const imageCommand = args.adminChat ? null : parseGenerateImageCommand(answer);
+    const rockPaperScissorsCommand = !args.adminChat && hasRockPaperScissorsIntent(prompt)
+      ? parseRockPaperScissorsCommand(answer)
+      : null;
+    const ticTacToeCommand = args.adminChat ? null : parseTicTacToeCommand(answer);
+    const samSpeakCommand = args.adminChat ? null : parseSamSpeakCommand(answer);
+
+    const channelManagementCommand = args.adminChat ? parseChannelManagementCommand(answer) : null;
+    const giveawayCommand = args.adminChat ? parseCreateGiveawayCommand(answer) : null;
+    const parsedToolAction = Boolean(
+      afkCommand
+      || reminderCommand
+      || pollCommand
+      || timerCommand
+      || scheduledMessageCommand
+      || avatarCommand
+      || imageCommand
+      || rockPaperScissorsCommand
+      || ticTacToeCommand
+      || samSpeakCommand
+      || channelManagementCommand
+      || giveawayCommand,
+    );
+    if (webSearch.results.length && !parsedToolAction) {
+      answer = `${answer}${formatWebSearchSources(webSearch.results)}`;
+    }
+
+    if (hasToolAction(answer)) {
+      const actionStatus = imageCommand ? "🎨 Creating your image…"
+        : pollCommand ? (pollCommand.when === "now" ? "📊 Creating your poll…" : "📊 Scheduling your poll…")
+          : timerCommand ? "⏱️ Setting your timer…"
+            : scheduledMessageCommand ? "🗓️ Scheduling your message…"
+              : reminderCommand ? "⏰ Setting your reminder…"
+                : afkCommand ? "Setting your AFK status…"
+                  : avatarCommand ? "Fetching that avatar…"
+                    : samSpeakCommand ? "🔊 Generating your voice message…"
+                      : rockPaperScissorsCommand || ticTacToeCommand ? "Starting your game…"
+                        : giveawayCommand ? "🎉 Setting up the giveaway…"
+                        : channelManagementCommand?.action === "create_role" ? "Creating the server role…"
+                          : channelManagementCommand?.action === "create_layout" ? "Building your server layout…"
+                          : channelManagementCommand ? "Updating the server…"
+                          : "I couldn't use that tool request. Please try again.";
+      await streamingEditor.reset(actionStatus).catch(() => undefined);
+    }
+
     let actionResponseHandled = false;
+
+    if (channelManagementCommand) {
+      const guild = "guild" in args.channel && args.channel.guild ? args.channel.guild : null;
+      if (!guild) {
+        answer = "This admin action can only be used in a server channel.";
+      } else if (diagnoseChannelActionPermission(channelManagementCommand, args.member?.permissions ?? null)) {
+        answer = diagnoseChannelActionPermission(channelManagementCommand, args.member?.permissions ?? null)!;
+      } else if ((channelManagementCommand.action === "delete_channel" || channelManagementCommand.action === "delete_category") && args.onAdminConfirmation) {
+        await args.onAdminConfirmation(channelManagementCommand, placeholder);
+        answer = "Confirmation required before deleting that Discord item.";
+        actionResponseHandled = true;
+      } else {
+          const result = await executeChannelManagementCommand(
+            guild,
+            channelManagementCommand,
+            message => editResponse(message).catch(() => undefined),
+            { channelId: args.channelId },
+          );
+        answer = result.message;
+        actionResponseHandled = true;
+        await editResponse(answer).catch(() => undefined);
+      }
+    }
+
+    if (giveawayCommand) {
+      const guild = "guild" in args.channel && args.channel.guild ? args.channel.guild : null;
+      const durationSeconds = parseScheduleDuration(giveawayCommand.duration);
+      if (!guild || !args.guildId || !isSendableTextChannel(args.channel)) {
+        answer = "Giveaways can only be started in a server text channel.";
+      } else if (!(await canManageGiveaways(args.guildId, args.member))) {
+        answer = "Giveaways require the configured giveaway manager role. Ask an administrator to run `c.gw add @role` first.";
+      } else if (durationSeconds === null || durationSeconds < 60) {
+        answer = "Giveaways must end between 1 minute and 30 days from now.";
+      } else {
+        let giveawayId: number | undefined;
+        try {
+          const requiredRole = await resolveGiveawayRole(guild, giveawayCommand.requiredRole);
+          const endsAt = Date.now() + durationSeconds * 1000;
+          giveawayId = await createGiveaway({
+            guildId: args.guildId,
+            channelId: args.channelId,
+            creatorId: args.user.id,
+            prize: giveawayCommand.prize,
+            endsAt,
+            winnerCount: giveawayCommand.winnerCount,
+            requiredRoleId: requiredRole?.id ?? null,
+            requiredRoleName: requiredRole?.name ?? null,
+          });
+          const giveaway = await getGiveaway(giveawayId);
+          if (!giveaway) throw new Error("The giveaway could not be loaded after creation.");
+          const post = await args.channel.send(await buildGiveawayPayload(giveaway, true));
+          if (!(await publishGiveaway(giveawayId, post.id))) throw new Error("The giveaway post could not be activated.");
+          answer = `🎉 Giveaway #${giveawayId} is live in <#${args.channelId}> and ends <t:${Math.floor(endsAt / 1000)}:R>.`;
+        } catch (error) {
+          if (giveawayId !== undefined) await deleteGiveaway(giveawayId).catch(() => undefined);
+          answer = error instanceof Error ? `I couldn't start the giveaway: ${error.message}` : "I couldn't start the giveaway.";
+        }
+      }
+      actionResponseHandled = true;
+      await editResponse(answer).catch(() => undefined);
+    }
+
     if (afkCommand) {
       const reason = normalizeAfkReason(afkCommand.reason);
       await setAfkStatus(args.user.id, args.guildId, reason, args.messageTimestamp ?? Date.now());
@@ -116,6 +507,7 @@ export async function runChat(args: {
         actionResponseHandled = true;
       }
     }
+
     if (reminderCommand) {
       const durationSeconds = parseReminderDuration(reminderCommand.duration);
       if (durationSeconds === null) {
@@ -136,13 +528,80 @@ export async function runChat(args: {
         }
       }
     }
+
+    if (pollCommand) {
+      if (!args.guildId || !isSendableTextChannel(args.channel)) {
+        answer = "Polls can only be created in a server text channel.";
+      } else {
+        const delaySeconds = pollCommand.when === "now" ? 0 : parseScheduleDuration(pollCommand.when);
+        if (delaySeconds === null) {
+          answer = "I couldn't schedule that poll. Use a delay up to 30 days, such as 2h or 1d.";
+        } else {
+          const pollId = await createPoll({
+            guildId: args.guildId,
+            channelId: args.channelId,
+            creatorId: args.user.id,
+            question: pollCommand.question,
+            options: pollCommand.options,
+            scheduledAt: Date.now() + delaySeconds * 1000,
+          });
+          if (delaySeconds === 0) {
+            const poll = await getPoll(pollId);
+            if (!poll) throw new Error("I couldn't load the poll I just created.");
+            const message = await args.channel.send(await buildPollPayload(poll));
+            await publishPoll(pollId, message.id);
+            answer = "Poll posted.";
+          } else {
+            answer = `Poll scheduled for <t:${Math.floor((Date.now() + delaySeconds * 1000) / 1000)}:F> (<t:${Math.floor((Date.now() + delaySeconds * 1000) / 1000)}:R>).`;
+          }
+        }
+      }
+      await editResponse(answer).catch(() => undefined);
+      actionResponseHandled = true;
+    }
+
+    if (timerCommand) {
+      const seconds = parseScheduleDuration(timerCommand.duration);
+      if (seconds === null) {
+        answer = "Timers need a positive duration up to 30 days, such as 10m or 2h.";
+      } else {
+        const dueAt = Date.now() + seconds * 1000;
+        await createTimer({ channelId: args.channelId, creatorId: args.user.id, label: timerCommand.label, dueAt });
+        answer = `Timer set for **${timerCommand.label}** — <t:${Math.floor(dueAt / 1000)}:R> (ends <t:${Math.floor(dueAt / 1000)}:t>).`;
+      }
+      await editResponse(answer).catch(() => undefined);
+      actionResponseHandled = true;
+    }
+
+    if (scheduledMessageCommand) {
+      const seconds = parseScheduleDuration(scheduledMessageCommand.duration);
+      if (!args.guildId || seconds === null) {
+        answer = !args.guildId ? "Scheduled messages can only be posted in a server channel." : "Schedule messages up to 30 days ahead, such as 2h or 1d.";
+      } else {
+        const scheduledAt = Date.now() + seconds * 1000;
+        const id = await createScheduledPost({ guildId: args.guildId, channelId: args.channelId, creatorId: args.user.id, content: scheduledMessageCommand.message, scheduledAt });
+        answer = `Message scheduled for <t:${Math.floor(scheduledAt / 1000)}:F> (<t:${Math.floor(scheduledAt / 1000)}:R>). Scheduled message #${id}.`;
+      }
+      await editResponse(answer).catch(() => undefined);
+      actionResponseHandled = true;
+    }
+
+    if (samSpeakCommand) {
+      const reservation = voiceReservation ?? reserveVoiceMessage({ channel: args.channel, channelId: args.channelId });
+      if (!voiceReservation) await editResponse("Generating voice…").catch(() => undefined);
+      const sent = await reservation.complete(samSpeakCommand.text);
+      answer = sent ? "🔊 Sent a voice message!" : "I couldn't send the voice message in this channel.";
+      await editResponse(answer).catch(() => undefined);
+      actionResponseHandled = true;
+    }
+
     if (imageCommand) {
       if (!args.guildId) {
         answer = "Image generation is only available in a Discord server, not in direct messages.";
         await editResponse(answer).catch(() => undefined);
         actionResponseHandled = true;
       } else {
-        await editResponse("🎨 Creating your image…").catch(() => undefined);
+        await editResponse("Generating image…").catch(() => undefined);
         try {
           const generated = await generateGuildImage(args.guildId, imageCommand.prompt);
           answer = `Generated image: ${imageCommand.prompt}`;
@@ -159,35 +618,49 @@ export async function runChat(args: {
         }
       }
     }
-    const samSpeakCommand = parseSamSpeakCommand(answer);
-      if (samSpeakCommand) {
-        const reservation = voiceReservation ?? reserveVoiceMessage({ channel: args.channel, channelId: args.channelId });
-        if (!voiceReservation) await editResponse("Generating voice…").catch(() => undefined);
-        const sent = await reservation.complete(samSpeakCommand.text);
-        answer = sent ? "🔊 Sent a voice message!" : "I couldn't send the voice message in this channel.";
-        await editResponse(answer).catch(() => undefined);
+
+    if (avatarCommand) {
+      answer = "Here is the avatar you asked for.";
+      if (args.onAvatar) {
+        await args.onAvatar(avatarCommand.target, placeholder);
         actionResponseHandled = true;
       }
-        if (!actionResponseHandled) {
-      const chunks = splitDiscordMessage(answer);
-      const editMessage = editResponse;
-      await editMessage(chunks[0]);
-      if (chunks.length > 1) {
-        const sendableChannel = args.channel;
-        if (!isSendableTextChannel(sendableChannel)) {
-          throw new Error("This channel cannot receive additional response messages.");
-        }
-        for (const chunk of chunks.slice(1)) {
-          await sendableChannel.send(chunk);
-        }
+    }
+
+    if (rockPaperScissorsCommand) {
+      answer = "Started a game of Rock, Paper, Scissors.";
+      if (args.onRockPaperScissors) {
+        await args.onRockPaperScissors(placeholder);
+        actionResponseHandled = true;
       }
     }
+
+    if (ticTacToeCommand) {
+      answer = "Started a game of Tic-Tac-Toe.";
+      if (args.onTicTacToe) {
+        await args.onTicTacToe(placeholder);
+        actionResponseHandled = true;
+      }
+    }
+
+    if (!actionResponseHandled) {
+      await streamingEditor.finish(answer);
+    }
+
     const responseTimeMs = Date.now() - startedAt;
     await recordResponseMetric(args.user.id, args.guildId, conversationChannelId, responseTimeMs);
-    await addHistory(args.user.id, args.guildId, conversationChannelId, { role: "user", content: prompt }, args.sourceMessageId, args.referencedMessageId);
-    await addHistory(args.user.id, args.guildId, conversationChannelId, { role: "assistant", content: answer }, placeholder.id);
+    if (!args.adminChat) {
+      const attachmentSummary = preparedAttachments.length ? `\n[Attached files: ${preparedAttachments.map(file => file.name).join(", ")}]` : "";
+      if (args.compactHistory) await replaceHistoryWithSummary(args.user.id, args.guildId, conversationChannelId, answer);
+      else if (regeneratingExistingAnswer) await replaceLastAssistant(args.user.id, args.guildId, conversationChannelId, answer);
+      else {
+        await addHistory(args.user.id, args.guildId, conversationChannelId, { role: "user", content: `${prompt}${attachmentSummary}` }, args.sourceMessageId, args.referencedMessageId);
+        await addHistory(args.user.id, args.guildId, conversationChannelId, { role: "assistant", content: answer }, placeholder.id);
+      }
+    }
   } finally {
     voiceReservation?.cancel();
     activePrompts.delete(key);
+    if (existingAfk && !afkCleared) await clearAfkStatus(args.user.id, args.guildId).catch(() => undefined);
   }
 }

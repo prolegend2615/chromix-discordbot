@@ -9,8 +9,6 @@ const commands = [
   new SlashCommandBuilder().setName("status").setDescription("Show your current AI settings and quota status"),
   new SlashCommandBuilder().setName("persona").setDescription("Choose or create an AI persona"),
   new SlashCommandBuilder().setName("delete-my-data").setDescription("Delete your stored data while keeping VIP access"),
-  new SlashCommandBuilder().setName("give-vip").setDescription("Give a user VIP access")
-    .addUserOption(option => option.setName("user").setDescription("User to grant VIP").setRequired(true)),
   new SlashCommandBuilder().setName("remove-vip").setDescription("Remove a user's VIP access")
     .addUserOption(option => option.setName("user").setDescription("User to remove VIP from").setRequired(true)),
   new SlashCommandBuilder().setName("blacklist").setDescription("Blacklist a user from using commands")

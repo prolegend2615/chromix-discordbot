@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { calculateAverageResponseMs, buildQuotaStatus, resolveThreadConversationKey } from "../src/services/metrics.js";
 import { setUserBlacklist, isUserBlacklisted } from "../src/services/settings.js";
+import { createChat, deleteChat, listChats } from "../src/services/chats.js";
 
 test("calculateAverageResponseMs averages a set of response timings", () => {
   assert.equal(calculateAverageResponseMs([1000, 2000, 3000]), 2000);
@@ -27,4 +28,17 @@ test("blacklist status flips on and off for a user", async () => {
   assert.equal(await isUserBlacklisted(userId), true);
   await setUserBlacklist(userId, false);
   assert.equal(await isUserBlacklisted(userId), false);
+});
+
+test("chat slots keep histories separate and enforce the free limit", async () => {
+  const userId = `chat-slot-test-${Date.now()}`;
+  const guildId = "chat-slot-guild";
+  const channelId = `chat-slot-channel-${Date.now()}`;
+  await createChat(userId, guildId, channelId, false, "Ideas");
+  await createChat(userId, guildId, channelId, false, "Work");
+  await assert.rejects(() => createChat(userId, guildId, channelId, false, "Too many"), /up to 3 chats/);
+  const result = await listChats(userId, guildId, channelId, false);
+  assert.equal(result.chats.length, 3);
+  await deleteChat(userId, guildId, channelId, result.chats[0]!.chat_id);
+  await deleteChat(userId, guildId, channelId, result.chats[1]!.chat_id);
 });

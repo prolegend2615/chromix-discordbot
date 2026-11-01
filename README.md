@@ -1,16 +1,17 @@
 # Discord AI Bot
 
-An AI-only Discord bot with prefix, slash-command, mention, and reply prompts. It stores settings and history in SQLite. Gemini `gemini-2.5-flash` is the default model; users can select a supported Groq model from `/settings`.
+An AI-only Discord bot with prefix, slash-command, mention, and reply prompts. It stores settings and history in SQLite. Gemini `gemini-3.6-flash` is the default model; users can choose Gemini, Xkiro, or OpenRouter in `/settings`. If the selected provider fails, Chromix tries other configured providers automatically.
 
 ## Setup
 
 1. Copy `.env.example` to `.env` and fill in the values.
-2. Add `GEMINI_API_KEY`; add `GROQ_API_KEY` as well if you want Groq selectable.
+2. Add `GEMINI_API_KEY`. `OPENROUTER_API_KEY` enables OpenRouter in `/settings` and as a fallback. `XKIRO_API_KEY` enables Xkiro in `/settings` and as a fallback. Optional `APINEX_API_KEY` and `VYCEAI_API_KEY` enable automatic fallbacks; they are not selectable in `/settings`.
+   Set `VIP_ADMIN_ID` to the Discord user ID allowed to run `c.givevip` and `c.remove-vip`.
 3. Install dependencies with `npm install`.
 4. Register commands with `npm run register`.
 5. Start the bot with `npm run dev`.
 
-Enable the **Message Content Intent** in the Discord Developer Portal. Give the bot permissions to View Channels, Send Messages, Embed Links, Read Message History, and Use Application Commands.
+Enable the **Message Content Intent** and **Server Members Intent** in the Discord Developer Portal. Give the bot permissions to View Channels, Send Messages, Embed Links, Read Message History, Use Application Commands, and Manage Roles if you enable verification or role menus.
 
 ## Global AI instructions
 
@@ -21,14 +22,54 @@ Edit [`system-instructions.txt`](system-instructions.txt) to control how the AI 
 - `c.chat <message>` / `/chat`
 - Mention the bot or reply to one of its messages
 - `c.settings` / `/settings`
+- `c.rpsettings` (opens private SFW roleplay settings; set a character name; roleplay is off by default)
 - `/help`, `/status`, `/persona`
 - `c.clear` / `/clear`
 - `c.reset` / `/reset`
 - `/delete-my-data` (keeps VIP access)
-- `/give-vip @user` (restricted to the configured owner ID)
+- `c.givevip @user 7d` (restricted to the configured owner ID; grants temporary VIP for 1 minute to 365 days)
+- `c.adminclear @user` (restricted to the same configured owner ID; clears that user's saved conversation history across channels and servers)
+- `c.remove-vip @user` / `/remove-vip` (restricted to the configured owner ID)
 - `c.listen [channel]` / `/listen` (server administrators)
 - `c.ignore [channel]` / `/ignore` (server administrators)
+- `c.admin <request>` / `c.adminchat <request>` (server administrators; creates and manages text channels and categories)
+- `c.chats` (show, switch, create, rename, or delete separate conversation histories; 3 free or 10 VIP per channel)
+- `c.newchat [name]`, `c.summarise`, `c.compact`, `c.regenerate`, and `c.export` (VIP export/regenerate)
+- `c.remember <fact>`, `c.memories`, and `c.forget <id>` (VIP cross-server personal memory)
+- `c.reminders`, `c.timers`, `c.scheduled`, and `c.cancel reminder|timer|scheduled|poll <id>`
+- `c.gw add @role` / `c.gw remove` (configure the specific giveaway-manager role), plus `c.gw end <id>`, `c.gw cancel <id>`, `c.gw reroll <id>`, and `c.gw edit (id) (duration) (winners) (prize)`
+- `c.serverconfig` / `c.privacy` (server configuration panel for welcome/goodbye messages, verification, selectable role menus, giveaway access, and history retention)
+
+VIP users receive 10 chat slots, up to 50 recent conversation messages, cross-server personal memory, selectable response styles, chat export and regeneration, plus 20 attachment uploads per hour with 25 MB per file and 50 MB total per message. Free users receive 3 chat slots, 5 history messages, and 3 attachment uploads per hour with the standard attachment limits.
+
+In admin chat, ask Chromix to build several categories and channels in one prompt. It creates categories first and assigns channels during creation, uses colorful Unicode emoji names such as `💬┃general` by default, and tracks channel-creation calls in SQLite to stay within the configured limit of 10 creations per rolling 10 minutes. If that limit is full, it shows a status and waits for the next slot.
+
+Mention Chromix, reply to one of its messages, or use `c.chat` with PNG/JPEG/WebP/GIF images, PDFs, or common plain-text/code files attached. Free users can analyze 3 uploads per rolling hour; VIP users can analyze 10. Each file must be 8 MB or smaller and each message can contain at most 16 MB of supported attachments. Upload content is sent to the selected AI provider, or a configured fallback provider if needed; only upload timestamps are stored for quota tracking.
+
+When a user asks about recent channel context, Chromix can fetch up to 20 earlier messages in the current channel, including author names and timestamps. The bot needs permission to view the channel and read its message history.
+
+`c.rpsettings` opens a private panel for an optional SFW roleplay mode. Users can set one relationship, up to three traits, and roleplay intensity; preferences apply across servers and DMs. Roleplay stays concise, and ordinary playful or exaggerated situations do not automatically make Chromix drop character.
+
+Administrators can also create colored roles with `c.admin` (Chromix chooses a fitting hex color if none is specified), and start giveaways with `c.admin`, for example: `start a giveaway for a Nitro gift, ending in 1 day, with 2 winners; only members with the VIP role can enter`. Chromix posts a styled embed with join/leave buttons, a live entry count, Discord end-time timestamps, optional role eligibility, and an automatic winner draw. Giveaway entries and end times are stored in SQLite and survive bot restarts.
+
+## AI actions (through chat)
+
+- **AFK** — ask the bot to set your AFK status, e.g. `set my afk status, reason: done for the day`.
+- **Reminder** — ask the bot to remind you later, e.g. `remind me in 15 minutes to check the oven`.
+- **Polls** — ask for a poll with 2–10 choices, either now or after a delay, e.g. `make a poll now: pizza or tacos` or `schedule a poll in 2 hours: movie night or game night`.
+- **Timers** — ask for a countdown, e.g. `set a 10-minute timer for the oven`. The confirmation uses Discord's relative timestamp format and the bot posts when it ends.
+- **Scheduled messages** — ask Chromix to draft and post a message later in the current channel, e.g. `write and schedule an event reminder for tomorrow` or `schedule this announcement in 3 hours: ...`. Delays are limited to 30 days; ambiguous clock times need a timezone.
+- **Server details** — ask for member/channel counts, the highest role, or the server owner. These answers come from Discord's guild data.
+- **Avatar** — ask the bot to show an avatar or profile picture, e.g. `show me my avatar` or `show the avatar of @user`. To see someone else's avatar, **mention (ping) them** in the message; if you ask for another member's avatar without pinging anyone, the bot will ask you to ping them.
+- **Rock, Paper, Scissors** — ask the bot to play, e.g. `@Chromix let's play rock paper scissors`. Choose a button to play a round; the score stays visible until you press **End Game**. Only the person who started the game can make moves.
+- **Tic-Tac-Toe** — ask the bot to play, e.g. `@Chromix let's play tic tac toe`. You play X and Chromix plays O on a 3×3 button board. Only the person who started the game can make moves.
 
 ## Flux TTS voice replies
 
-Set OPENROUTER_API_KEY to enable Deepgram Flux TTS voice replies through OpenRouter. Set OPENROUTER_TTS_VOICE to choose a supported Flux voice; the default is flux-alexis-en. Voice requests in the same channel are reserved and processed in FIFO order. The bot displays “Generating voice…” while waiting, tries Flux first, and automatically falls back to the local SAM WAV voice if Flux or delivery fails.
+Set `OPENROUTER_API_KEY` to enable Deepgram Flux TTS voice replies through OpenRouter. Set `OPENROUTER_TTS_VOICE` to choose a supported Flux voice; the default is `flux-alexis-en`. Voice requests in the same channel are reserved and processed in FIFO order. The bot displays “Generating voice…” while waiting, tries Flux first, and automatically falls back to the local SAM WAV voice if Flux or delivery fails.
+
+## AI image generation
+
+Ask the AI to create an image in a server chat, for example `c.chat create an image of a watercolor fox under a starry sky`. The AI turns the request into a visual prompt and generates one image through Pollinations. Image generation is disabled in direct messages.
+
+Set `POLLINATIONS_API_KEY` in the bot's environment using a secret from [Pollinations](https://enter.pollinations.ai/keys). Do not commit the key. Each Discord server shares a limit of 3 image-generation requests in any rolling 15-minute window and 50 images per UTC day. Requests are recorded in the existing SQLite database so limits persist across restarts. Failed provider calls still count toward the 15-minute request limit; only successful generations count toward the daily image cap.
