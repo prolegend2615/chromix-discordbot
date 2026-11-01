@@ -240,36 +240,6 @@ export function userFacingProviderError(error: unknown) {
   }
 }
 
-// --- Image Generation Action ---
-
-export type GenerateImageCommand = { prompt: string };
-export const IMAGE_GENERATION_WINDOW_MS = 15 * 60 * 1000;
-export const IMAGE_GENERATIONS_PER_WINDOW = 3;
-export const IMAGE_GENERATIONS_PER_UTC_DAY = 50;
-
-export function hasImageGenerationIntent(text: string): boolean {
-  return /\b(?:generate|create|make|draw|paint|illustrate|render|design)\b[\s\S]{0,100}\b(?:images?|pictures?|illustrations?|artworks?|art|photos?|wallpapers?|logos?|posters?|graphics?)\b/i.test(text)
-    || /\b(?:draw|paint|illustrate)\b/i.test(text);
-}
-
-export function parseGenerateImageCommand(text: string): GenerateImageCommand | null {
-  const match = /^\s*use\s+generate_image\s*\(([\s\S]*)\)\s*[`*_~.!?]*\s*$/i.exec(text);
-  const prompt = match?.[1]?.trim().replace(/\s+/g, " ");
-  return prompt ? { prompt: prompt.slice(0, 1200) } : null;
-}
-
-export type ImageQuotaDecision = { allowed: true } | { allowed: false; reason: "window" | "daily"; retryAt: number };
-
-export function evaluateImageGenerationQuota(input: { requestsInWindow: number; imagesToday: number; oldestRequestAt: number | null; now: number }): ImageQuotaDecision {
-  if (input.imagesToday >= IMAGE_GENERATIONS_PER_UTC_DAY) {
-    const date = new Date(input.now);
-    return { allowed: false, reason: "daily", retryAt: Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + 1) };
-  }
-  if (input.requestsInWindow >= IMAGE_GENERATIONS_PER_WINDOW) {
-    return { allowed: false, reason: "window", retryAt: (input.oldestRequestAt ?? input.now) + IMAGE_GENERATION_WINDOW_MS + 1 };
-  }
-  return { allowed: true };
-}
 // --- SAM TTS Action ---
 
 export type SamSpeakCommand = {
