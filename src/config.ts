@@ -10,8 +10,10 @@ export const config = {
   discordToken: required("DISCORD_TOKEN"),
   discordClientId: required("DISCORD_CLIENT_ID"),
   discordGuildId: process.env.DISCORD_GUILD_ID,
+  vipAdminId: required("VIP_ADMIN_ID"),
   geminiApiKey: required("GEMINI_API_KEY"),
   groqApiKey: process.env.GROQ_API_KEY,
   openrouterApiKey: process.env.OPENROUTER_API_KEY,
+  pollinationsApiKey: process.env.POLLINATIONS_API_KEY,
   openrouterTtsVoice: process.env.OPENROUTER_TTS_VOICE ?? "flux-alexis-en",
 };

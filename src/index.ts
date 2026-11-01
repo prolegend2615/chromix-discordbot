@@ -11,11 +11,11 @@ import { getPromptStatus, setChannelRule } from "./services/access.js";
 import { getAverageResponseTime } from "./services/metrics.js";
 import { clearAfkStatus, formatAfkDuration, formatAfkMention, getAfkStatus, type AfkStatus } from "./services/afk.js";
 import { formatReminderDuration, isTransientNetworkError, MODELS, userFacingProviderError } from "./logic.js";
-import { deleteReminder, getDueReminders } from "./services/reminders.js";
+import { deleteReminder, deleteUserReminder, getDueReminders, getUserReminders, markReminderDeliveryFailure } from "./services/reminders.js";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
 const prefix = "c.";
-const VIP_ADMIN_ID = "1347611715826876496";
+const VIP_ADMIN_ID = config.vipAdminId;
 let reminderSweepInProgress = false;
 
 async function deliverDueReminders() {
@@ -27,8 +27,7 @@ async function deliverDueReminders() {
       try {
         const channel = await client.channels.fetch(reminder.channel_id);
         if (!channel || !("send" in channel) || typeof channel.send !== "function") {
-          console.error(`Reminder ${reminder.id} could not find a sendable channel; it will be retried.`);
-          continue;
+          throw new Error("Reminder channel is no longer available or cannot receive messages.");
         }
         await (channel.send as (payload: {
           content: string;
@@ -39,7 +38,8 @@ async function deliverDueReminders() {
         });
         await deleteReminder(reminder.id);
       } catch (error) {
-        console.error(`Reminder ${reminder.id} could not be delivered; it will be retried.`, error);
+        const failure = await markReminderDeliveryFailure(reminder, error).catch(() => null);
+        console.error(`Reminder ${reminder.id} delivery failed${failure?.failed ? " permanently after three attempts" : "; it will be retried"}.`, error);
       }
     }
   } catch (error) {
@@ -365,10 +365,7 @@ client.once(Events.ClientReady, ready => {
 
 client.on(Events.MessageCreate, async message => {
   if (message.author.bot) return;
-  if (await isUserBlacklisted(message.author.id)) {
-    await message.reply({ content: "You are blacklisted and cannot use bot commands.", allowedMentions: { repliedUser: false } }).catch(() => undefined);
-    return;
-  }
+  if (await isUserBlacklisted(message.author.id)) return;
   const content = message.content.trim();
   const command = content.toLowerCase();
   try {
@@ -380,7 +377,20 @@ client.on(Events.MessageCreate, async message => {
         allowedMentions: { parse: [], repliedUser: false },
       });
     }
-    if (command.startsWith(`${prefix}chat`)) return await sendChatFromMessage(message, content.slice(`${prefix}chat`.length));
+    if (command === `${prefix}chat` || command.startsWith(`${prefix}chat `)) return await sendChatFromMessage(message, content.slice(`${prefix}chat`.length).trim());
+    if (command === `${prefix}reminders`) {
+      const reminders = await getUserReminders(message.author.id, message.guildId ?? undefined);
+      const list = reminders.length ? reminders.map(item => `#${item.id} — <t:${Math.floor(item.remind_at / 1000)}:R> — ${item.message}${item.delivery_attempts >= 3 ? " (delivery failed)" : ""}`).join("\n") : "You have no pending reminders.";
+      await message.reply({ content: list.length > 1900 ? `${list.slice(0, 1860)}\n… (list truncated)` : list, allowedMentions: { parse: [] } });
+      return;
+    }
+    if (command.startsWith(`${prefix}cancel `)) {
+      const reminderId = Number(content.slice(`${prefix}cancel`.length).trim());
+      if (!Number.isSafeInteger(reminderId) || reminderId <= 0) throw new Error("Usage: `c.cancel <reminder-id>`. Use `c.reminders` to list reminders.");
+      const removed = await deleteUserReminder(reminderId, message.author.id);
+      await message.reply({ content: removed ? `Cancelled reminder #${reminderId}.` : "That reminder was not found.", allowedMentions: { parse: [] } });
+      return;
+    }
     if (command === `${prefix}clear`) {
       await handleClearCommand(messageCommandContext(message), false);
       return;
@@ -458,7 +468,7 @@ client.on(Events.MessageCreate, async message => {
   } catch (error) {
     const text = error instanceof Error && /AI provider|rate.?limit|timeout|unavailable|api key|request failed/i.test(error.message)
       ? userFacingProviderError(error)
-      : error instanceof Error ? error.message : "Something went wrong while handling that request.";
+      : error instanceof Error && /^(Please |You need |I am |Only |Usage:|That |This |Reminders |The reminder|Custom |Regenerate )/i.test(error.message) ? error.message : "Something went wrong while handling that request.";
     await message.reply({ content: text, allowedMentions: { repliedUser: false } }).catch(() => undefined);
   }
 });
@@ -557,7 +567,7 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.isStringSelectMenu()) await handleSettingSelect(interaction);
     if (interaction.isButton()) await handleSettingsContinue(interaction);
     if (interaction.isModalSubmit() && interaction.customId === "settings:prompt-modal") {
-      updateSettings(interaction.user.id, interaction.guildId ?? undefined, { custom_system_prompt: interaction.fields.getTextInputValue("custom-prompt").trim() });
+      await updateSettings(interaction.user.id, interaction.guildId ?? undefined, { custom_system_prompt: interaction.fields.getTextInputValue("custom-prompt").trim() });
       await interaction.reply({ content: "Custom instructions saved.", ephemeral: true });
     }
     if (interaction.isModalSubmit() && interaction.customId === "settings:persona-modal") {
@@ -570,10 +580,11 @@ client.on(Events.InteractionCreate, async interaction => {
       await interaction.reply({ content: customPersona ? "Custom persona saved." : "Custom persona cleared; using Default.", ephemeral: true });
     }
   } catch (error) {
-    const text = error instanceof Error ? error.message : "Something went wrong.";
+    console.error("Interaction handler failed.", error);
+    const text = "Something went wrong while handling that interaction. Please try again.";
     if (interaction.isRepliable()) {
-      if (interaction.replied || interaction.deferred) await interaction.followUp({ content: text, ephemeral: true });
-      else await interaction.reply({ content: text, ephemeral: true });
+      if (interaction.replied || interaction.deferred) await interaction.followUp({ content: text, ephemeral: true }).catch(() => undefined);
+      else await interaction.reply({ content: text, ephemeral: true }).catch(() => undefined);
     }
   }
 });
