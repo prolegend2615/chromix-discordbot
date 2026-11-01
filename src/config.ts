@@ -10,7 +10,7 @@ export const config = {
   discordToken: required("DISCORD_TOKEN"),
   discordClientId: required("DISCORD_CLIENT_ID"),
   discordGuildId: process.env.DISCORD_GUILD_ID,
-  vipAdminId: required("VIP_ADMIN_ID"),
+  vipAdminId: process.env.VIP_ADMIN_ID ?? "",
   geminiApiKey: required("GEMINI_API_KEY"),
   openrouterApiKey: process.env.OPENROUTER_API_KEY,
   xkiroApiKey: process.env.XKIRO_API_KEY,
