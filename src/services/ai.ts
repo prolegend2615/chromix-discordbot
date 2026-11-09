@@ -34,8 +34,7 @@ const OPENROUTER_STREAM_IDLE_TIMEOUT_MS = 45_000;
 const XKIRO_CHAT_URL = "https://api.xkiro.com/v1/chat/completions";
 const APINEX_CHAT_URL = "https://api.apinex.bond/v1/chat/completions";
 const VYCEAI_CHAT_URL = "https://vyceai.com/v1/chat/completions";
-const XKIRO_MODEL = "qwen/qwen3.8-max:free";
-const XKIRO_IMAGE_MODEL = "qwen/qwen3.8-omni-flash:free";
+const XKIRO_IMAGE_MODEL = "mistralai/mistral-small-2603";
 const APINEX_MODELS = ["free/gpt-6-luna", "free/gemini-3.8-flash"] as const;
 const VYCEAI_MODEL = "glm-5.3-flash";
 
@@ -239,7 +238,12 @@ function buildProviderAttempts(input: {
 
   if (input.settings.provider === "gemini") addGemini(input.settings.model);
   else if (input.settings.provider === "openrouter") addOpenRouter(input.settings.model);
-  else addFallbackApi("Xkiro", XKIRO_CHAT_URL, config.xkiroApiKey, hasImageAttachments ? XKIRO_IMAGE_MODEL : input.settings.model);
+  else if (input.settings.provider === "xkiro") {
+    const xkiroModels = hasImageAttachments
+      ? [XKIRO_IMAGE_MODEL, ...MODELS.xkiro.filter(model => model !== XKIRO_IMAGE_MODEL)]
+      : [input.settings.model, ...MODELS.xkiro.filter(model => model !== input.settings.model)];
+    for (const model of xkiroModels) addFallbackApi("Xkiro", XKIRO_CHAT_URL, config.xkiroApiKey, model);
+  } else addOpenRouter(input.settings.model);
 
   if (input.settings.provider === "gemini") {
     if (config.openrouterApiKey) addOpenRouter(MODELS.openrouter[0]);
@@ -249,7 +253,10 @@ function buildProviderAttempts(input: {
   }
 
   if (input.settings.provider !== "xkiro" && config.xkiroApiKey) {
-    addFallbackApi("Xkiro", XKIRO_CHAT_URL, config.xkiroApiKey, hasImageAttachments ? XKIRO_IMAGE_MODEL : XKIRO_MODEL);
+    const xkiroModels = hasImageAttachments
+      ? [XKIRO_IMAGE_MODEL, ...MODELS.xkiro.filter(model => model !== XKIRO_IMAGE_MODEL)]
+      : [...MODELS.xkiro];
+    for (const model of xkiroModels) addFallbackApi("Xkiro", XKIRO_CHAT_URL, config.xkiroApiKey, model);
   }
   if (config.apinexApiKey) {
     for (const model of APINEX_MODELS) addFallbackApi("APInex", APINEX_CHAT_URL, config.apinexApiKey, model);
@@ -296,8 +303,9 @@ function buildImageGenerationActionInstruction(): string {
   return [
     "IMAGE GENERATION ACTION IS AVAILABLE FOR THIS MESSAGE.",
     "If the user asks you to create, draw, or generate a new image, output ONLY this exact syntax:",
-    "`use generate_image (detailed image prompt)`",
-    "Replace the text inside the parentheses with a clear, vivid visual prompt describing the requested image. Keep the prompt under 1200 characters.",
+    "Use `use generate_image (pollinations) (detailed image prompt)` or `use generate_image (xkiro) (detailed image prompt)`, choosing exactly one provider.",
+    "Choose Pollinations for its existing Flux image generator, or Xkiro for SenseNova U1.5 Lite. Pick the generator that best fits the requested image. If one is unavailable or fails, the application may use the other.",
+    "Replace the final parentheses with a clear, vivid visual prompt describing the requested image. Keep the prompt under 1200 characters.",
     "Do not use this action for questions about images, image analysis, or requests to display an existing Discord avatar. Use the avatar action only when the user asks to see an existing profile picture.",
     "Do not add explanation or any text outside the action syntax.",
   ].join("\n");

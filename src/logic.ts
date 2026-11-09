@@ -1,6 +1,11 @@
 export const MODELS = {
   gemini: ["gemini-3.6-flash"],
-  xkiro: ["qwen/qwen3.8-max:free"],
+  xkiro: [
+    "mistralai/mistral-small-2603",
+    "mistralai/ministral-14b",
+    "mistralai/mistral-medium-3.5",
+    "cohere/command-a-plus",
+  ],
   openrouter: ["google/gemini-3.6-flash", "deepseek/deepseek-v4-flash", "mistralai/mistral-small-2603"],
 } as const;
 
@@ -292,6 +297,7 @@ export function parseShowAvatarCommand(text: string): ShowAvatarCommand | null {
 // --- Image Generation Action ---
 
 export type GenerateImageCommand = {
+  provider: "pollinations" | "xkiro";
   prompt: string;
 };
 
@@ -308,11 +314,13 @@ export function hasImageGenerationIntent(text: string): boolean {
 
 /** Parses the AI action format used to request one generated image. */
 export function parseGenerateImageCommand(text: string): GenerateImageCommand | null {
-  const args = readAction(text, "generate_image", 1);
+  const args = readAction(text, "generate_image", 2) ?? readAction(text, "generate_image", 1);
   if (!args) return null;
-  const prompt = args[0].trim().replace(/\s+/g, " ");
+  const provider = args.length === 1 ? "pollinations" : args[0].trim().toLowerCase();
+  if (provider !== "pollinations" && provider !== "xkiro") return null;
+  const prompt = (args.length === 1 ? args[0] : args[1]).trim().replace(/\s+/g, " ");
   if (!prompt) return null;
-  return { prompt: prompt.slice(0, 1200) };
+  return { provider, prompt: prompt.slice(0, 1200) };
 }
 
 export type ImageQuotaDecision =

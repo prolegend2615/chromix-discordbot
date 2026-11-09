@@ -128,11 +128,20 @@ export async function generateWithProviderFallback(
 
   let lastError: unknown;
   for (const [index, attempt] of attempts.entries()) {
+    // Providers can finish or fail while transport callbacks are still queued.
+    // Give each attempt its own callback lifetime so a late chunk from a failed
+    // provider cannot be appended to the next provider's response.
+    let attemptIsActive = true;
+    const onAttemptChunk = (chunk: string) => {
+      if (attemptIsActive) onChunk?.(chunk);
+    };
     try {
-      const text = await attempt.generate(onChunk);
+      const text = await attempt.generate(onAttemptChunk);
+      attemptIsActive = false;
       if (!text.trim()) throw new Error(`${attempt.provider} returned an empty response.`);
       return { text, provider: attempt.provider, model: attempt.model, attemptNumber: index + 1 };
     } catch (error) {
+      attemptIsActive = false;
       lastError = error;
       await onFailure(attempt, error, attempts.length - index - 1);
     }

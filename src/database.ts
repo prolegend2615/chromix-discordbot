@@ -44,5 +44,6 @@ export const dbPromise = (async () => {
   if (!columns.some(c => c.name === "response_style")) await db.exec("ALTER TABLE user_settings ADD COLUMN response_style TEXT NOT NULL DEFAULT 'Natural'");
   await db.exec("UPDATE user_settings SET model = 'gemini-3.6-flash' WHERE model = 'gemini-2.5-flash'");
   await db.exec("UPDATE user_settings SET provider = 'gemini', model = 'gemini-3.6-flash' WHERE provider = 'groq'");
+  await db.exec("UPDATE user_settings SET model = 'mistralai/mistral-small-2603' WHERE provider = 'xkiro' AND model LIKE 'qwen/%'");
   return db;
 })();

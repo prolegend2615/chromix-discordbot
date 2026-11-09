@@ -603,7 +603,7 @@ export async function runChat(args: {
       } else {
         await editResponse("Generating image…").catch(() => undefined);
         try {
-          const generated = await generateGuildImage(args.guildId, imageCommand.prompt);
+          const generated = await generateGuildImage(args.guildId, imageCommand.prompt, imageCommand.provider);
           answer = `Generated image: ${imageCommand.prompt}`;
           await placeholder.edit({
             content: "Here is your generated image.",
