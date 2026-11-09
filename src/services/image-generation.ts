@@ -29,7 +29,7 @@ function getUtcDayStart(timestamp: number): number {
   return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
 }
 
-async function reserveImageGeneration(guildId: string, now = Date.now()): Promise<ImageGenerationReservation> {
+async function reserveImageGeneration(guildId: string, userId: string, now = Date.now()): Promise<ImageGenerationReservation> {
   return withReservationLock(async () => {
     const db = await dbPromise;
     const dayStart = getUtcDayStart(now);
@@ -46,8 +46,8 @@ async function reserveImageGeneration(guildId: string, now = Date.now()): Promis
         now - IMAGE_REQUEST_TIMEOUT_MS * 2 - 30_000,
       );
       const today = await db.get<{ count: number }>(
-        "SELECT COUNT(*) AS count FROM image_generation_events WHERE guild_id = ? AND created_at >= ? AND (status = 'succeeded' OR (status = 'reserved' AND created_at >= ?))",
-        guildId,
+        "SELECT COUNT(*) AS count FROM image_generation_events WHERE user_id = ? AND created_at >= ? AND (status = 'succeeded' OR (status = 'reserved' AND created_at >= ?))",
+        userId,
         dayStart,
         now - IMAGE_REQUEST_TIMEOUT_MS * 2 - 30_000,
       );
@@ -70,8 +70,9 @@ async function reserveImageGeneration(guildId: string, now = Date.now()): Promis
       }
 
       const inserted = await db.run(
-        "INSERT INTO image_generation_events (guild_id, created_at, status) VALUES (?, ?, 'reserved')",
+        "INSERT INTO image_generation_events (guild_id, user_id, created_at, status) VALUES (?, ?, ?, 'reserved')",
         guildId,
+        userId,
         now,
       );
       const eventId = inserted.lastID;
@@ -92,7 +93,7 @@ async function setGenerationStatus(eventId: number, status: "succeeded" | "faile
 
 function formatQuotaMessage(reason: "window" | "daily", retryAt: number): string {
   if (reason === "daily") {
-    return "This server has reached its limit of 50 generated images for today. The limit resets at 00:00 UTC.";
+    return "You have reached your daily limit of 100 generated images. Your limit resets at 00:00 UTC.";
   }
   const minutes = Math.max(1, Math.ceil((retryAt - Date.now()) / 60_000));
   return `This server has reached its limit of 3 image generations in 15 minutes. Try again in about ${minutes} minute${minutes === 1 ? "" : "s"}.`;
@@ -204,6 +205,7 @@ async function generateXkiroImage(prompt: string): Promise<GeneratedImage> {
 export async function generateGuildImage(
   guildId: string,
   prompt: string,
+  userId: string,
   provider: "pollinations" | "xkiro" = "pollinations",
 ): Promise<GeneratedImage> {
   const cleanedPrompt = prompt.trim().replace(/\s+/g, " ").slice(0, 1200);
@@ -211,7 +213,7 @@ export async function generateGuildImage(
   if (!config.pollinationsApiKey && !config.xkiroApiKey) {
     throw new Error("Image generation is not configured. Add POLLINATIONS_API_KEY or XKIRO_API_KEY to the bot environment.");
   }
-  const reservation = await reserveImageGeneration(guildId);
+  const reservation = await reserveImageGeneration(guildId, userId);
   if (!reservation.allowed) throw new Error(formatQuotaMessage(reservation.reason, reservation.retryAt));
 
   const selectedProvider = provider === "xkiro" ? "xkiro" : "pollinations";

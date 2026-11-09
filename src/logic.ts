@@ -308,7 +308,7 @@ export type GenerateImageCommand = {
 
 export const IMAGE_GENERATION_WINDOW_MS = 15 * 60 * 1000;
 export const IMAGE_GENERATIONS_PER_WINDOW = 3;
-export const IMAGE_GENERATIONS_PER_UTC_DAY = 50;
+export const IMAGE_GENERATIONS_PER_UTC_DAY = 100;
 
 /** Detect requests to create a new image, not requests to view an existing avatar. */
 export function hasImageGenerationIntent(text: string): boolean {
