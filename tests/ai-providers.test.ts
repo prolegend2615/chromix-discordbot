@@ -17,7 +17,7 @@ test("sends an OpenAI-compatible chat request and extracts its answer", async ()
     provider: "Xkiro",
     endpoint: "https://api.xkiro.com/v1/chat/completions",
     apiKey: "test-secret",
-    model: "qwen/qwen3.8-max:free",
+    model: "mistralai/mistral-small-2603",
     messages: [
       { role: "system", content: "Be concise." },
       { role: "user", content: "Hello" },
@@ -30,12 +30,13 @@ test("sends an OpenAI-compatible chat request and extracts its answer", async ()
   assert.equal(requestUrl, "https://api.xkiro.com/v1/chat/completions");
   assert.equal(new Headers(requestInit?.headers).get("authorization"), "Bearer test-secret");
   assert.deepEqual(JSON.parse(String(requestInit?.body)), {
-    model: "qwen/qwen3.8-max:free",
+    model: "mistralai/mistral-small-2603",
     messages: [
       { role: "system", content: "Be concise." },
       { role: "user", content: "Hello" },
     ],
     max_tokens: 500,
+    stream: true,
   });
 });
 

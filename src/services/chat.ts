@@ -6,7 +6,7 @@ import { getGuildConfig } from "./guild-config.js";
 import { formatPersonalMemories, listPersonalMemories } from "./memory.js";
 import { checkPromptLimit, isChannelAllowed, releaseAttachmentUploadReservations, reserveAttachmentUploads } from "./access.js";
 import { streamAnswer } from "./ai.js";
-import { recordResponseMetric, resolveThreadConversationKey } from "./metrics.js";
+import { recordResponseMetric, resolvePromptLockKey } from "./metrics.js";
 import { clearAfkStatus, getAfkStatus, normalizeAfkReason, setAfkStatus, type AfkStatus } from "./afk.js";
 import {
   formatReminderDuration,
@@ -153,9 +153,8 @@ function createStreamingEditor(editFirst: (content: string) => Promise<unknown>,
 }
 
 function getThreadChannelId(channel: TextBasedChannel): string | undefined {
-  if (!("threadId" in channel)) return undefined;
-  const threadId = channel.threadId;
-  return typeof threadId === "string" ? threadId : undefined;
+  if (!("isThread" in channel) || typeof channel.isThread !== "function" || !channel.isThread()) return undefined;
+  return "id" in channel && typeof channel.id === "string" ? channel.id : undefined;
 }
 
 async function getServerFacts(channel: TextBasedChannel): Promise<string> {
@@ -250,7 +249,7 @@ export async function runChat(args: {
   const baseConversationChannelId = threadId ?? args.channelId;
   const currentChat = await getCurrentChat(args.user.id, args.guildId, baseConversationChannelId);
   const conversationChannelId = chatConversationChannelId(baseConversationChannelId, currentChat.chat_id);
-  const key = resolveThreadConversationKey(args.guildId, threadId, args.user.id);
+  const key = resolvePromptLockKey(args.guildId, baseConversationChannelId, args.user.id);
   if (activePrompts.has(key)) throw new Error("I am already answering your previous prompt.");
   const limit = await checkPromptLimit(args.user.id);
   if (!limit.ok) throw new Error(limit.message);

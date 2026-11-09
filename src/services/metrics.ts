@@ -16,8 +16,8 @@ export function buildQuotaStatus({ remaining, violations, windowMs }: { remainin
   return { remaining, violations, windowMs };
 }
 
-export function resolveThreadConversationKey(guildId: string | undefined, threadId: string | undefined, userId: string): string {
-  return `${guildId ?? "dm"}:${threadId ?? "channel"}:${userId}`;
+export function resolvePromptLockKey(guildId: string | undefined, channelId: string, userId: string): string {
+  return `${guildId ?? "dm"}:${channelId}:${userId}`;
 }
 
 export async function recordResponseMetric(userId: string, guildId: string | undefined, channelId: string, responseTimeMs: number) {

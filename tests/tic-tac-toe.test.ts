@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import type { ButtonInteraction, Message } from "discord.js";
+import { MessageFlags, type ButtonInteraction, type Message } from "discord.js";
 import {
   handleTicTacToeButton,
   startTicTacToeGame,
@@ -33,7 +33,7 @@ test("Tic-Tac-Toe gives the starter X, Chromix O, and rejects other players", as
     assert.equal(outsider.updates.length, 0);
     assert.deepEqual(outsider.replies[0], {
       content: "Only the person who started this game can play.",
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
 
     const ownerMove = makeButtonInteraction(messageId, "game-owner", "ttt:move:4");

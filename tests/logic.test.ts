@@ -10,7 +10,8 @@ test("parses prefix commands and arguments case-insensitively", () => {
 test("validates provider models", () => {
   assert.equal(isModelAvailable("gemini", "gemini-3.6-flash"), true);
   assert.equal(isModelAvailable("gemini", "llama-3.3-70b-versatile"), false);
-  assert.equal(isModelAvailable("xkiro", "qwen/qwen3.8-max:free"), true);
+  assert.equal(isModelAvailable("xkiro", "mistralai/mistral-small-2603"), true);
+  assert.equal(isModelAvailable("xkiro", "qwen/qwen3.8-max:free"), false);
   assert.equal(isModelAvailable("openrouter", "deepseek/deepseek-v4-flash"), true);
   assert.deepEqual(Object.keys(MODELS), ["gemini", "xkiro", "openrouter"]);
 });
@@ -106,26 +107,33 @@ test("recognizes image creation requests without treating avatar display as imag
   assert.equal(hasImageGenerationIntent("create images for my server"), true);
   assert.equal(hasImageGenerationIntent("draw a tiny castle on a cloud"), true);
   assert.equal(hasImageGenerationIntent("make me a new avatar"), true);
+  assert.equal(hasImageGenerationIntent("make me an avatar"), true);
   assert.equal(hasImageGenerationIntent("show me my avatar"), false);
   assert.equal(hasImageGenerationIntent("what is image generation?"), false);
 });
 
 test("parses only a complete image generation action", () => {
   assert.deepEqual(parseGenerateImageCommand("use generate_image (a fox in a blue forest)"), {
+    provider: "pollinations",
     prompt: "a fox in a blue forest",
   });
   assert.deepEqual(parseGenerateImageCommand("use generate_image (a tiny (storybook) fox)"), {
+    provider: "pollinations",
     prompt: "a tiny (storybook) fox",
+  });
+  assert.deepEqual(parseGenerateImageCommand("Use `use generate_image (xkiro) (a neon city)`"), {
+    provider: "xkiro",
+    prompt: "a neon city",
   });
   assert.equal(parseGenerateImageCommand("use generate_image ()"), null);
   assert.equal(parseGenerateImageCommand("use generate_image (fox) then say hello"), null);
 });
 
-test("enforces per-server rolling and UTC-day image limits", () => {
+test("enforces per-server rolling and per-user UTC-day image limits", () => {
   const now = Date.UTC(2026, 9, 2, 12, 0, 0);
   assert.deepEqual(evaluateImageGenerationQuota({
     requestsInWindow: 2,
-    imagesToday: 49,
+    imagesToday: 99,
     oldestRequestAt: now - 60_000,
     now,
   }), { allowed: true });
@@ -137,7 +145,7 @@ test("enforces per-server rolling and UTC-day image limits", () => {
   }), { allowed: false, reason: "window", retryAt: now - 60_000 + 15 * 60 * 1000 + 1 });
   assert.deepEqual(evaluateImageGenerationQuota({
     requestsInWindow: 0,
-    imagesToday: 50,
+    imagesToday: 100,
     oldestRequestAt: null,
     now,
   }), { allowed: false, reason: "daily", retryAt: Date.UTC(2026, 9, 3) });

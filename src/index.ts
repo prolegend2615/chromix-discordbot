@@ -1,7 +1,7 @@
 import {
   ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Client, Events, GatewayIntentBits, ModalBuilder,
   MessageFlags, PermissionsBitField, RoleSelectMenuBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder,
-  type ButtonInteraction, type ChatInputCommandInteraction, type Message, type MessageCreateOptions, type StringSelectMenuInteraction, type User,
+  type ButtonInteraction, type ChatInputCommandInteraction, type Message, type MessageCreateOptions, type StringSelectMenuInteraction, type TextBasedChannel, type User,
 } from "discord.js";
 import { config } from "./config.js";
 import { runChat } from "./services/chat.js";
@@ -679,9 +679,9 @@ function helpEmbed() {
     .addFields(
       { name: "Settings", value: "`/settings` or `c.settings` — configure provider, model, response length, safety, instructions, and persona. `c.rpsettings` opens private SFW roleplay controls, including a custom character name.\n`/persona` — quickly choose or write a custom persona." },
       { name: "Owner command", value: "`c.adminclear @user` clears that user's saved conversation history across all channels and servers." },
-      { name: "History", value: "`/clear` removes history in this channel. When you refer to recent channel context, Chromix can look up up to 20 earlier messages. Thread chats get their own persistent conversation history. `/reset` also resets your settings. `/delete-my-data` removes stored data but keeps VIP." },
+      { name: "History", value: "`/clear` removes history in this channel. When you refer to recent channel context, Chromix can look up up to 20 earlier messages. Thread chats get their own persistent conversation history. Use `c.code <task>` to start a focused coding thread; the bot needs permission to create and reply in public threads. `/reset` also resets your settings. `/delete-my-data` removes stored data but keeps VIP." },
       { name: "Limits", value: "8 prompts per minute, with a 5-second cooldown. Attachment analysis allows 3 uploads per rolling hour for free users and 20 for VIP; VIP files can be 25 MB each and 50 MB per message. VIP users receive 50 history messages; others receive 5." },
-      { name: "Image generation", value: "Ask me to create an image in a server chat. Each server can generate 3 images every 15 minutes and 50 per UTC day. Image generation is unavailable in DMs." },
+      { name: "Image generation", value: "Ask me to create an image in a server chat. Each server can generate 3 images every 15 minutes; each user gets 100 successful images per UTC day across servers. Image generation is unavailable in DMs." },
       { name: "Games", value: "Ask me to play Rock, Paper, Scissors or Tic-Tac-Toe. In Tic-Tac-Toe, you are X and Chromix is O; choose a square to make a move." },
       { name: "Polls and timers", value: "Ask me to create a poll now or later, or start a countdown timer. Timers show a live Discord relative timestamp and post a notice when they finish." },
       { name: "Scheduled actions", value: "Ask for reminders, timers, polls, or scheduled messages. Use `c.reminders`, `c.timers`, or `c.scheduled` to list your pending actions and `c.cancel reminder|timer|scheduled|poll <id>` to cancel one." },
@@ -689,7 +689,7 @@ function helpEmbed() {
       { name: "VIP personal features", value: "VIP users can choose response styles in `/settings` or `c.settings`, save cross-server memories with `c.remember`, view them with `c.memories`, delete them with `c.forget <id>`, export chats with `c.export`, and regenerate the previous answer with `c.regenerate`." },
       { name: "Server details", value: "Ask about member and channel counts, the highest role, or the server owner. I use Discord's cached server data; counts can lag until Discord updates the bot." },
       { name: "Server admins", value: "`c.admin <request>` or `c.adminchat <request>` manages channels/categories/roles. Destructive channel actions require confirmation. `c.gw add @role` sets the specific role allowed to create/edit giveaways; `c.gw remove` clears it; `c.gw end <id>`, `c.gw cancel <id>`, `c.gw reroll <id>`, and `c.gw edit (id) (duration) (winners) (prize)` manage giveaways. `c.serverconfig` manages welcome/goodbye messages, verification, selectable role menus, and history retention. `c.listen` and `c.ignore` control bot channels." },
-      { name: "All prefix commands", value: "`c.chat`, `c.settings`, `c.rpsettings`, `c.help`, `c.status`, `c.persona`, `c.clear`, `c.reset`, `c.delete-my-data`, `c.chats`, `c.newchat`, `c.summarise`, `c.compact`, `c.regenerate`, `c.remember`, `c.memories`, `c.forget`, `c.export`, `c.reminders`, `c.timers`, `c.scheduled`, `c.cancel`, `c.serverconfig`, `c.privacy`, `c.gw`, `c.listen`, `c.ignore`, `c.admin`, `c.adminchat`, `c.givevip`, `c.remove-vip`, `c.blacklist`, and `c.unblacklist`. Prefix commands are case-insensitive." },
+      { name: "All prefix commands", value: "`c.chat`, `c.code`, `c.settings`, `c.rpsettings`, `c.help`, `c.status`, `c.persona`, `c.clear`, `c.reset`, `c.delete-my-data`, `c.chats`, `c.newchat`, `c.summarise`, `c.compact`, `c.regenerate`, `c.remember`, `c.memories`, `c.forget`, `c.export`, `c.reminders`, `c.timers`, `c.scheduled`, `c.cancel`, `c.serverconfig`, `c.privacy`, `c.gw`, `c.listen`, `c.ignore`, `c.admin`, `c.adminchat`, `c.givevip`, `c.remove-vip`, `c.blacklist`, and `c.unblacklist`. Prefix commands are case-insensitive." },
     );
 }
 
@@ -994,10 +994,14 @@ async function exportCurrentChat(message: Message) {
   await message.reply({ content: `✅ Exported **${currentChat.name}** with ${history.length} messages.`, files: [{ attachment: Buffer.from(lines.join("\n"), "utf8"), name: `${currentChat.name.replace(/[^a-z0-9_-]+/gi, "-").slice(0, 40) || "chromix-chat"}.txt` }], allowedMentions: { parse: [] } });
 }
 
-async function sendChatFromMessage(message: Message, prompt: string, referenceId?: string, adminChat = false, compactHistory = false, regenerate = false) {
+async function sendChatFromMessage(message: Message, prompt: string, referenceId?: string, adminChat = false, compactHistory = false, regenerate = false, channelOverride?: TextBasedChannel) {
+  const responseChannel = channelOverride ?? message.channel;
+  const replyInResponseChannel = (content: string) => channelOverride
+    ? sendChannelMessage(responseChannel.id, { content, allowedMentions: { parse: [], repliedUser: false } })
+    : message.reply({ content, allowedMentions: { repliedUser: false } });
   await runChat({
     prompt, adminChat, user: message.author, member: message.member, guildId: message.guildId ?? undefined,
-    guildName: message.guild?.name, channel: message.channel, channelId: message.channelId,
+    guildName: message.guild?.name, channel: responseChannel, channelId: responseChannel.id,
     attachments: message.attachments.map(attachment => ({
       name: attachment.name,
       url: attachment.url,
@@ -1008,7 +1012,7 @@ async function sendChatFromMessage(message: Message, prompt: string, referenceId
     sourceMessageId: message.id, referencedMessageId: referenceId,
     compactHistory,
     regenerate,
-    reply: content => message.reply({ content, allowedMentions: { repliedUser: false } }),
+    reply: replyInResponseChannel,
     onAfkSet: (reason, placeholder) => placeholder.edit({
       embeds: [afkSetEmbed(reason)],
       allowedMentions: { parse: [], repliedUser: false },
@@ -1039,7 +1043,10 @@ async function sendChatFromMessage(message: Message, prompt: string, referenceId
         allowedMentions: { parse: [], repliedUser: false },
       });
     },
-    onWelcomeBack: status => message.reply({
+    onWelcomeBack: status => channelOverride ? sendChannelMessage(responseChannel.id, {
+      embeds: [welcomeBackEmbed(message.author.globalName ?? message.author.username, status)],
+      allowedMentions: { parse: [], repliedUser: false },
+    }).then(() => undefined) : message.reply({
       embeds: [welcomeBackEmbed(message.author.globalName ?? message.author.username, status)],
       allowedMentions: { parse: [], repliedUser: false },
     }).then(() => undefined),
@@ -1118,6 +1125,32 @@ client.on(Events.MessageCreate, async message => {
         return;
       }
       await sendChatFromMessage(message, request, message.reference?.messageId, true);
+      return;
+    }
+    if (isPrefixCommand(content, "code")) {
+      const topic = content.slice(`${prefix}code`.length).trim();
+      if (!topic) {
+        await message.reply({ content: "Usage: `c.code <coding task>` — I’ll open a focused thread and start there.", allowedMentions: { repliedUser: false } });
+        return;
+      }
+      if (!message.guild || ("isThread" in message.channel && message.channel.isThread())) {
+        await message.reply({ content: "Start `c.code` in a regular server text channel so I can open a coding thread.", allowedMentions: { repliedUser: false } });
+        return;
+      }
+      const threadName = Array.from(`💻 ${topic.replace(/\s+/gu, " ")}`).slice(0, 100).join("").trim();
+      let thread;
+      try {
+        thread = await message.startThread({
+          name: threadName,
+          autoArchiveDuration: 1440,
+          reason: `Coding session requested by ${message.author.tag}`,
+        });
+      } catch (error) {
+        console.warn("Could not create a coding thread.", error);
+        await message.reply({ content: "I couldn’t create a coding thread here. Check that this channel allows public threads and I can create and send messages in them.", allowedMentions: { repliedUser: false } });
+        return;
+      }
+      await sendChatFromMessage(message, topic, message.id, false, false, false, thread);
       return;
     }
     if (isPrefixCommand(content, "chats")) {

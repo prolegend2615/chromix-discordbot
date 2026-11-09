@@ -5,8 +5,8 @@ An AI-only Discord bot with prefix, slash-command, mention, and reply prompts. I
 ## Setup
 
 1. Copy `.env.example` to `.env` and fill in the values.
-2. Add `GEMINI_API_KEY`. `OPENROUTER_API_KEY` enables OpenRouter in `/settings` and as a fallback. `XKIRO_API_KEY` enables Xkiro in `/settings` and as a fallback. Optional `APINEX_API_KEY` and `VYCEAI_API_KEY` enable automatic fallbacks; they are not selectable in `/settings`.
-   Set `VIP_ADMIN_ID` to the Discord user ID allowed to run `c.givevip` and `c.remove-vip`.
+2. Add `GEMINI_API_KEY`. `OPENROUTER_API_KEY` enables OpenRouter in `/settings` and as a fallback. `XKIRO_API_KEY` enables Xkiro in `/settings`, as an AI fallback, and for image generation. Optional `APINEX_API_KEY` and `VYCEAI_API_KEY` enable automatic fallbacks; they are not selectable in `/settings`.
+   Optionally set `VIP_ADMIN_ID` to enable owner-only VIP and blacklist commands.
 3. Install dependencies with `npm install`.
 4. Register commands with `npm run register`.
 5. Start the bot with `npm run dev`.
@@ -20,6 +20,7 @@ Edit [`system-instructions.txt`](system-instructions.txt) to control how the AI 
 ## Commands
 
 - `c.chat <message>` / `/chat`
+- `c.code <task>` (opens a focused thread for a coding task; reply to Chromix in that thread to continue; the bot needs Create Public Threads and Send Messages in Threads)
 - Mention the bot or reply to one of its messages
 - `c.settings` / `/settings`
 - `c.rpsettings` (opens private SFW roleplay settings; set a character name; roleplay is off by default)
@@ -70,6 +71,6 @@ Set `OPENROUTER_API_KEY` to enable Deepgram Flux TTS voice replies through OpenR
 
 ## AI image generation
 
-Ask the AI to create an image in a server chat, for example `c.chat create an image of a watercolor fox under a starry sky`. The AI turns the request into a visual prompt and generates one image through Pollinations. Image generation is disabled in direct messages.
+Ask the AI to create an image in a server chat, for example `c.chat create an image of a watercolor fox under a starry sky`. The AI chooses between Pollinations Flux and Xkiro SenseNova U1.5 Lite, then tries the other generator if the selected one fails. Image generation is disabled in direct messages.
 
-Set `POLLINATIONS_API_KEY` in the bot's environment using a secret from [Pollinations](https://enter.pollinations.ai/keys). Do not commit the key. Each Discord server shares a limit of 3 image-generation requests in any rolling 15-minute window and 50 images per UTC day. Requests are recorded in the existing SQLite database so limits persist across restarts. Failed provider calls still count toward the 15-minute request limit; only successful generations count toward the daily image cap.
+Set `POLLINATIONS_API_KEY` and/or `XKIRO_API_KEY` in the bot's environment. Do not commit these keys. Each Discord server shares a limit of 3 image-generation requests in any rolling 15-minute window, and each user gets 100 successful generations per UTC day across servers. Requests are recorded in the existing SQLite database so limits persist across restarts. Failed provider calls still count toward the 15-minute request limit; only successful generations count toward the daily image cap.

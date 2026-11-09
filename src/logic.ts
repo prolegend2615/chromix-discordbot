@@ -313,8 +313,9 @@ export const IMAGE_GENERATIONS_PER_UTC_DAY = 100;
 /** Detect requests to create a new image, not requests to view an existing avatar. */
 export function hasImageGenerationIntent(text: string): boolean {
   const explicitImageRequest = /\b(?:generate|create|make|draw|paint|illustrate|render|design)\b[\s\S]{0,80}\b(?:images?|pictures?|illustrations?|artworks?|art|photos?|wallpapers?|logos?|posters?|graphics?)\b/i.test(text);
+  const newAvatarRequest = /\b(?:generate|create|make|design)\b[\s\S]{0,50}\b(?:new\s+)?avatars?\b/i.test(text);
   const drawingRequest = /\b(?:draw|paint|illustrate)\b/i;
-  return explicitImageRequest || drawingRequest.test(text);
+  return explicitImageRequest || newAvatarRequest || drawingRequest.test(text);
 }
 
 /** Parses the AI action format used to request one generated image. */
