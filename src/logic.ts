@@ -61,6 +61,11 @@ function readAction(text: string, name: string, argumentCount?: number): string[
   if (trailing && !/^[)`*_~\s.!?]*$/.test(trailing)) return null;
   // Don't recognize a command quoted as an example or discussion.
   const preceding = text.slice(0, match.index).trimEnd();
+  const trailingText = text.slice(cursor).trimStart();
+  const inlineActionWrapper = preceding.endsWith("`")
+    && trailingText.startsWith("`")
+    && /^(?:use|action)\s*:?$/i.test(preceding.slice(0, -1).trim());
+  if (inlineActionWrapper) return args;
   if (/(?:["'`]|\b(?:example|format|syntax|command)\s*:)\s*$/i.test(preceding)) return null;
   return args;
 }
