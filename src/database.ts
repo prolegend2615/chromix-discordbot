@@ -4,6 +4,7 @@ import { open } from "sqlite";
 import sqlite3 from "sqlite3";
 
 mkdirSync("data", { recursive: true });
+mkdirSync(join("data", "workspaces"), { recursive: true });
 export const dbPromise = (async () => {
   const db = await open({ filename: join("data", "bot.db"), driver: sqlite3.Database });
   await db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
@@ -23,6 +24,14 @@ export const dbPromise = (async () => {
   await db.run("UPDATE giveaways SET status='cancelled' WHERE status='publishing'");
   await db.exec("CREATE TABLE IF NOT EXISTS polls (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, creator_id TEXT NOT NULL, question TEXT NOT NULL, options_json TEXT NOT NULL, scheduled_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'scheduled', message_id TEXT, created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS polls_due ON polls(status, scheduled_at); CREATE TABLE IF NOT EXISTS poll_votes (poll_id INTEGER NOT NULL REFERENCES polls(id) ON DELETE CASCADE, user_id TEXT NOT NULL, option_index INTEGER NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(poll_id, user_id)); CREATE TABLE IF NOT EXISTS scheduled_posts (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, creator_id TEXT NOT NULL, content TEXT NOT NULL, scheduled_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'scheduled', created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS scheduled_posts_due ON scheduled_posts(status, scheduled_at); CREATE TABLE IF NOT EXISTS timers (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id TEXT NOT NULL, creator_id TEXT NOT NULL, label TEXT NOT NULL, due_at INTEGER NOT NULL, created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS timers_due ON timers(due_at);");
   await db.exec("CREATE TABLE IF NOT EXISTS guild_config (guild_id TEXT PRIMARY KEY, welcome_enabled INTEGER NOT NULL DEFAULT 0, welcome_channel_id TEXT, welcome_message TEXT NOT NULL DEFAULT 'Welcome {user}!', goodbye_enabled INTEGER NOT NULL DEFAULT 0, goodbye_channel_id TEXT, goodbye_message TEXT NOT NULL DEFAULT 'Goodbye {user}.', verification_enabled INTEGER NOT NULL DEFAULT 0, verification_channel_id TEXT, verification_role_id TEXT, retention_days INTEGER NOT NULL DEFAULT 0, giveaway_manager_role_id TEXT, giveaway_manager_role_name TEXT, updated_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS chat_sessions (user_id TEXT NOT NULL, guild_id TEXT NOT NULL DEFAULT '', channel_id TEXT NOT NULL, chat_id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(user_id,guild_id,channel_id,chat_id)); CREATE INDEX IF NOT EXISTS chat_sessions_scope ON chat_sessions(user_id,guild_id,channel_id,updated_at); CREATE TABLE IF NOT EXISTS community_role_menus (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, message_id TEXT, options_json TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS scheduled_delivery_failures (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, action_id INTEGER NOT NULL, guild_id TEXT NOT NULL DEFAULT '', creator_id TEXT NOT NULL DEFAULT '', error TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS personal_memories (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, memory TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS personal_memories_user ON personal_memories(user_id,updated_at DESC);");
+  await db.exec(`CREATE TABLE IF NOT EXISTS cwc_workspaces (
+    user_id TEXT NOT NULL,
+    slot INTEGER NOT NULL CHECK(slot IN (1, 2, 3)),
+    name TEXT NOT NULL DEFAULT 'Workspace',
+    is_active INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY(user_id, slot)
+  );`);
   const addColumn = async (table: string, column: string, definition: string) => {
     const tableColumns = await db.all<{ name: string }[]>(`PRAGMA table_info(${table})`);
     if (!tableColumns.some(item => item.name === column)) await db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);

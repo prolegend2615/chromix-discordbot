@@ -24,6 +24,8 @@ import { applyRoleMenuSelection, attachRoleMenuMessage, buildRoleMenuPayload, cr
 import { diagnoseChannelActionPermission, executeChannelManagementCommand, type ChannelManagementCommand } from "./services/channel-management.js";
 import { addPersonalMemory, deletePersonalMemory, listPersonalMemories } from "./services/memory.js";
 
+import { handleCwcCommand, parseCwcPrefixInvocation } from "./commands/cwc.js";
+
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages] });
 const prefix = "c.";
 const VIP_ADMIN_ID = config.vipAdminId;
@@ -289,6 +291,7 @@ type CommandReplyPayload = {
   embeds?: EmbedBuilder[];
   components?: unknown;
   ephemeral?: boolean;
+  files?: { attachment: Buffer; name: string }[];
   allowedMentions?: { repliedUser?: boolean; parse?: Array<"users" | "roles" | "everyone"> };
 };
 
@@ -387,7 +390,7 @@ async function handlePersonaCommand(context: CommandContext) {
 async function handleDeleteMyDataCommand(context: CommandContext) {
   await deleteUserDataExceptVip(context.userId);
   await context.reply({
-    content: "Your saved conversations and chat slots, prompts, attachment upload history, reminders, timers, polls, scheduled messages, response metrics, quota violations, and personal settings were deleted. Your VIP status was kept.",
+    content: "Your saved conversations and chat slots, prompts, attachment upload history, reminders, timers, polls, scheduled messages, response metrics, quota violations, CWC workspace files, and personal settings were deleted. Your VIP status was kept.",
     ephemeral: context.ephemeral,
     allowedMentions: { repliedUser: false },
   });
@@ -689,7 +692,8 @@ function helpEmbed() {
       { name: "VIP personal features", value: "VIP users can choose response styles in `/settings` or `c.settings`, save cross-server memories with `c.remember`, view them with `c.memories`, delete them with `c.forget <id>`, export chats with `c.export`, and regenerate the previous answer with `c.regenerate`." },
       { name: "Server details", value: "Ask about member and channel counts, the highest role, or the server owner. I use Discord's cached server data; counts can lag until Discord updates the bot." },
       { name: "Server admins", value: "`c.admin <request>` or `c.adminchat <request>` manages channels/categories/roles. Destructive channel actions require confirmation. `c.gw add @role` sets the specific role allowed to create/edit giveaways; `c.gw remove` clears it; `c.gw end <id>`, `c.gw cancel <id>`, `c.gw reroll <id>`, and `c.gw edit (id) (duration) (winners) (prize)` manage giveaways. `c.serverconfig` manages welcome/goodbye messages, verification, selectable role menus, and history retention. `c.listen` and `c.ignore` control bot channels." },
-      { name: "All prefix commands", value: "`c.chat`, `c.code`, `c.settings`, `c.rpsettings`, `c.help`, `c.status`, `c.persona`, `c.clear`, `c.reset`, `c.delete-my-data`, `c.chats`, `c.newchat`, `c.summarise`, `c.compact`, `c.regenerate`, `c.remember`, `c.memories`, `c.forget`, `c.export`, `c.reminders`, `c.timers`, `c.scheduled`, `c.cancel`, `c.serverconfig`, `c.privacy`, `c.gw`, `c.listen`, `c.ignore`, `c.admin`, `c.adminchat`, `c.givevip`, `c.remove-vip`, `c.blacklist`, and `c.unblacklist`. Prefix commands are case-insensitive." },
+      { name: "CWC workspace (VIP)", value: "Ask me to create, fix, or explain code files. I use a private 3-slot workspace with up to 10 files per slot and 2 MB per file, and I read files before changing them. Manage it with `/cwc` or `c.cwc`: `list`, `files [slot]`, `switch <slot>`, `rename <slot> <name>`, `clear [slot]`, and `download [slot]`." },
+      { name: "All prefix commands", value: "`c.chat`, `c.code`, `c.settings`, `c.rpsettings`, `c.help`, `c.status`, `c.persona`, `c.clear`, `c.reset`, `c.delete-my-data`, `c.chats`, `c.newchat`, `c.summarise`, `c.compact`, `c.regenerate`, `c.remember`, `c.memories`, `c.forget`, `c.export`, `c.cwc`, `c.reminders`, `c.timers`, `c.scheduled`, `c.cancel`, `c.serverconfig`, `c.privacy`, `c.gw`, `c.listen`, `c.ignore`, `c.admin`, `c.adminchat`, `c.givevip`, `c.remove-vip`, `c.blacklist`, and `c.unblacklist`. Prefix commands are case-insensitive." },
     );
 }
 
@@ -1153,6 +1157,11 @@ client.on(Events.MessageCreate, async message => {
       await sendChatFromMessage(message, topic, message.id, false, false, false, thread);
       return;
     }
+    const cwcInvocation = parseCwcPrefixInvocation(content, prefix);
+    if (cwcInvocation) {
+      await handleCwcCommand(messageCommandContext(message), cwcInvocation.subcommand, { slot: cwcInvocation.slot, name: cwcInvocation.name });
+      return;
+    }
     if (isPrefixCommand(content, "chats")) {
       await showChats(messageCommandContext(message));
       return;
@@ -1357,6 +1366,13 @@ client.on(Events.InteractionCreate, async interaction => {
         const channel = interaction.options.getChannel("channel") ?? interaction.channel;
         if (!channel || channel.type !== ChannelType.GuildText) throw new Error("Choose a text channel.");
         await handleChannelRuleCommand(interactionCommandContext(interaction, { targetChannel: channel }), command);
+        return;
+      }
+      if (command === "cwc") {
+        const subcommand = interaction.options.getSubcommand();
+        const slot = interaction.options.getInteger("slot") ?? undefined;
+        const name = interaction.options.getString("name") ?? undefined;
+        await handleCwcCommand(interactionCommandContext(interaction), subcommand, { slot, name });
         return;
       }
       if (command === "chat") {

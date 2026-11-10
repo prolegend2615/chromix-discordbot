@@ -444,3 +444,70 @@ export function getTicTacToeBotMoves(board: TicTacToeBoard): number[] {
 export function hasChannelManagementIntent(text: string): boolean {
   return /\b(?:create|make|new|delete|remove)\b[\s\S]{0,100}\b(?:channel|category)\b/i.test(text);
 }
+// --- Code With Chromix (C.W.C) Actions ---
+
+export type CwcAction =
+  | { type: "read_file"; path: string; startLine?: number; endLine?: number }
+  | { type: "write_file"; path: string; content: string }
+  | { type: "delete_file"; path: string }
+  | { type: "list_files" };
+
+export const CWC_ACTION_START_PATTERN = /<<<CHROMIX_ACTION_START:[A-Z_]+>>>/;
+
+/** Detect requests that should activate the CWC workspace (files, code, or explicit CWC mention). */
+export function hasCwcIntent(text: string): boolean {
+  return /\b(?:cwc|workspace|workspaces|code with chromix)\b/i.test(text)
+    || /\b(?:read|write|edit|update|create|delete|fix|debug|refactor|review|improve|explain|analy[sz]e)\b[\s\S]{0,80}\b(?:file|files|code|script|program|project|function|class|component|module|repo|repository|readme)\b/i.test(text)
+    || /\b(?:file|files|code|script|program|project|function|class|component|module|repo|repository|readme)\b[\s\S]{0,80}\b(?:bug|error|mistake|issue|problem|wrong|broken)\b/i.test(text)
+    || /\.(?:py|js|ts|tsx|jsx|java|c|cpp|cs|go|rs|rb|php|html|css|json|md|txt|yml|yaml|sql|sh|toml)\b/i.test(text);
+}
+
+function normalizeCwcPath(value: string): string | null {
+  const path = value.trim();
+  if (!path || path.length > 200 || path.includes("\0") || path.split(/[\\\/]/).some(part => part === "..")) return null;
+  return path;
+}
+
+export function parseCwcActions(text: string): { actions: CwcAction[]; cleanText: string } {
+  const actions: CwcAction[] = [];
+  const blockRegex = /<<<CHROMIX_ACTION_START:([A-Z_]+)>>>([\s\S]*?)<<<CHROMIX_ACTION_END>>>/g;
+
+  const cleanText = text.replace(blockRegex, (_match, actionType: string, body: string) => {
+    const trimmedType = actionType.trim().toUpperCase();
+
+    if (trimmedType === "READ_FILE") {
+      const pathMatch = /\[PATH:\s*([^\]]+)\]/i.exec(body);
+      const path = pathMatch ? normalizeCwcPath(pathMatch[1]) : null;
+      if (path) {
+        const linesMatch = /\[LINES:\s*(\d+)\s*-\s*(\d+)\]/i.exec(body);
+        const startLine = linesMatch ? parseInt(linesMatch[1], 10) : undefined;
+        const endLine = linesMatch ? parseInt(linesMatch[2], 10) : undefined;
+        actions.push({ type: "read_file", path, startLine, endLine });
+      }
+    } else if (trimmedType === "WRITE_FILE") {
+      const pathMatch = /\[PATH:\s*([^\]]+)\]/i.exec(body);
+      const path = pathMatch ? normalizeCwcPath(pathMatch[1]) : null;
+      const contentIndex = body.search(/\[CONTENT\]/i);
+      if (path && contentIndex !== -1) {
+        let content = body.slice(contentIndex + "[CONTENT]".length);
+        if (content.startsWith("\r\n")) content = content.slice(2);
+        else if (content.startsWith("\n")) content = content.slice(1);
+        if (content.endsWith("\r\n")) content = content.slice(0, -2);
+        else if (content.endsWith("\n")) content = content.slice(0, -1);
+        actions.push({ type: "write_file", path, content });
+      }
+    } else if (trimmedType === "DELETE_FILE") {
+      const pathMatch = /\[PATH:\s*([^\]]+)\]/i.exec(body);
+      const path = pathMatch ? normalizeCwcPath(pathMatch[1]) : null;
+      if (path) {
+        actions.push({ type: "delete_file", path });
+      }
+    } else if (trimmedType === "LIST_FILES") {
+      actions.push({ type: "list_files" });
+    }
+
+    return "";
+  }).trim();
+
+  return { actions, cleanText };
+}

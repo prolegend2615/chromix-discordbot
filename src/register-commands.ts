@@ -21,6 +21,19 @@ const commands = [
     .addChannelOption(option => option.setName("channel").setDescription("Channel to enable").addChannelTypes(ChannelType.GuildText)),
   new SlashCommandBuilder().setName("ignore").setDescription("Disable the bot in a channel (admin only)")
     .addChannelOption(option => option.setName("channel").setDescription("Channel to disable").addChannelTypes(ChannelType.GuildText)),
+  new SlashCommandBuilder().setName("cwc").setDescription("Manage your Code With Chromix (CWC) workspace (VIP)")
+    .addSubcommand(subcommand => subcommand.setName("list").setDescription("List your workspace slots"))
+    .addSubcommand(subcommand => subcommand.setName("files").setDescription("List files in a workspace slot")
+      .addIntegerOption(option => option.setName("slot").setDescription("Slot number (defaults to the active slot)").setMinValue(1).setMaxValue(3)))
+    .addSubcommand(subcommand => subcommand.setName("switch").setDescription("Switch the active workspace slot")
+      .addIntegerOption(option => option.setName("slot").setDescription("Slot number").setMinValue(1).setMaxValue(3).setRequired(true)))
+    .addSubcommand(subcommand => subcommand.setName("rename").setDescription("Rename a workspace slot")
+      .addIntegerOption(option => option.setName("slot").setDescription("Slot number").setMinValue(1).setMaxValue(3).setRequired(true))
+      .addStringOption(option => option.setName("name").setDescription("New slot name").setMaxLength(32).setRequired(true)))
+    .addSubcommand(subcommand => subcommand.setName("clear").setDescription("Delete all files in a workspace slot")
+      .addIntegerOption(option => option.setName("slot").setDescription("Slot number (defaults to the active slot)").setMinValue(1).setMaxValue(3)))
+    .addSubcommand(subcommand => subcommand.setName("download").setDescription("Download a workspace slot as a zip")
+      .addIntegerOption(option => option.setName("slot").setDescription("Slot number (defaults to the active slot)").setMinValue(1).setMaxValue(3))),
 ].map(command => command.toJSON());
 
 const rest = new REST().setToken(config.discordToken);

@@ -9,6 +9,7 @@ import { streamAnswer } from "./ai.js";
 import { recordResponseMetric, resolvePromptLockKey } from "./metrics.js";
 import { clearAfkStatus, getAfkStatus, normalizeAfkReason, setAfkStatus, type AfkStatus } from "./afk.js";
 import {
+  CWC_ACTION_START_PATTERN,
   formatReminderDuration,
   hasImageGenerationIntent,
   hasPollIntent,
@@ -48,6 +49,8 @@ import { createPoll, buildPollPayload, getPoll, publishPoll } from "./polls.js";
 import { createScheduledPost, createTimer, parseScheduleDuration } from "./scheduled-actions.js";
 import { buildGiveawayPayload, canManageGiveaways, createGiveaway, deleteGiveaway, getGiveaway, publishGiveaway, resolveGiveawayRole } from "./giveaways.js";
 import { prepareAttachments, validateAttachmentInputs, type DiscordAttachmentInput } from "./attachments.js";
+import { formatCwcOperationResults } from "./cwc.js";
+import { applyCwcResponse, createCwcLoopState, shouldEnableCwc } from "./cwc-loop.js";
 
 const activePrompts = new Set<string>();
 const serverFactsCache = new Map<string, { expiresAt: number; facts: string }>();
@@ -116,7 +119,7 @@ function createStreamingEditor(editFirst: (content: string) => Promise<unknown>,
     push(text: string) {
       draft += text;
       bufferedCharacters += text.length;
-      if (hasToolAction(draft)) {
+      if (hasToolAction(draft) || CWC_ACTION_START_PATTERN.test(draft)) {
         actionDetected = true;
         return;
       }
@@ -317,6 +320,9 @@ export async function runChat(args: {
       regeneratingExistingAnswer = true;
     }
     const personalMemories = !args.adminChat && settings.vip ? formatPersonalMemories(await listPersonalMemories(args.user.id)) : "";
+    const cwcState = await shouldEnableCwc(args.user.id, Boolean(settings.vip), prompt, Boolean(args.adminChat))
+      ? await createCwcLoopState(args.user.id)
+      : null;
 
     const userName = args.user.globalName ?? args.user.username;
     const serverNickname = args.member?.nickname ?? "None";
@@ -327,7 +333,7 @@ export async function runChat(args: {
     const webSearch = await runWebSearchAgent({
       enabled: !args.adminChat,
       ask: async context => {
-        for (let actionTurn = 0; actionTurn < 2; actionTurn += 1) {
+        for (let actionTurn = 0; actionTurn < 5; actionTurn += 1) {
           let response = "";
           await streamAnswer({
             prompt,
@@ -343,6 +349,8 @@ export async function runChat(args: {
             history,
             messageTimestamp: args.messageTimestamp ?? Date.now(),
             adminChatActionEnabled: args.adminChat,
+            cwcWorkspaceSummary: cwcState?.workspaceSummary,
+            cwcFeedback: cwcState?.feedback || undefined,
             reminderActionEnabled: !args.adminChat && hasReminderIntent(prompt)
               && !hasScheduleMessageIntent(prompt) && !hasPollIntent(prompt) && !hasTimerIntent(prompt),
             pollActionEnabled: !args.adminChat && Boolean(args.guildId) && hasPollIntent(prompt),
@@ -367,6 +375,14 @@ export async function runChat(args: {
           const recentMessagesCommand = args.adminChat ? null : parseGetRecentMessagesCommand(response);
           if (!recentMessagesCommand) {
             if (/\buse\s+get_recent_messages\b/i.test(response)) return "I couldn't retrieve the channel context for that request.";
+            if (cwcState) {
+              const outcome = await applyCwcResponse(args.user.id, response, cwcState);
+              if (outcome.kind === "continue") {
+                await streamingEditor.reset(outcome.notice).catch(() => undefined);
+                continue;
+              }
+              if (outcome.kind === "handled") return outcome.text;
+            }
             return response;
           }
           if (!args.guildId || recentMessagesUsed) return "I couldn't retrieve the channel context for that request.";
@@ -382,6 +398,10 @@ export async function runChat(args: {
       onSearchStart: () => streamingEditor.reset("Searching the web…"),
     });
     let answer = webSearch.answer;
+    if (cwcState?.operations.length) {
+      const cwcFooter = formatCwcOperationResults(cwcState.operations, cwcState.workspace);
+      if (cwcFooter) answer = `${answer.trim() ? `${answer.trim()}\n\n` : ""}${cwcFooter}`;
+    }
 
     const afkCommand = args.adminChat ? null : parseSetAfkCommand(answer);
     const reminderCommand = args.adminChat ? null : parseSetReminderCommand(answer);
